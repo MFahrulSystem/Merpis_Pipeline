@@ -3,24 +3,18 @@ import sys
 import requests
 import pandas as pd
 import numpy as np
-from dotenv import load_dotenv
 from supabase import create_client, Client
 
 
 # =====================================================
-# LOAD ENV
+# LOAD ENV FROM GITHUB SECRETS / SYSTEM ENV
 # =====================================================
 
-load_dotenv("environment.env")
+MERPIS_API_URL = os.environ["MERPIS_API_URL"]
+MERPIS_API_TOKEN = os.environ["MERPIS_API_TOKEN"]
 
-API_URL = os.getenv(
-    "API_URL",
-    "https://merpis.ptmerahputih.com/api/monitoring?year=all"
-)
-
-MERPIS_TOKEN = os.getenv("Bearer 13|0c2Tk8HsCjzLf2PrLZlrrsHg2GGZkgTbDBetcoTn34b2a8d2")
-SUPABASE_URL = os.getenv("https://uceltqgsuktjbbnjvilk.supabase.co")
-SUPABASE_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVjZWx0cWdzdWt0amJibmp2aWxrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTE3MjM0MiwiZXhwIjoyMDk0NzQ4MzQyfQ.pAMTzriQumCi6f4o_f9b-9eeYxjVyomFqM2DqRMzZ-A")
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 TABLE_NAME = "monitoring_project"
 
