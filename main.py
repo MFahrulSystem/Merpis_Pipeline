@@ -349,16 +349,8 @@ def clean_for_supabase(df_matrix_final):
     df_upload = df_matrix_final.copy()
 
     keyword_tanggal = [
-        "ETA",
-        "Arrive",
-        "Start",
-        "Complete",
-        "Berthing",
-        "Jetty",
-        "LHV",
-        "Board",
-        "Sailing",
-        "Target"
+        "ETA", "Arrive", "Start", "Complete", "Berthing",
+        "Jetty", "LHV", "Board", "Sailing", "Target"
     ]
 
     kolom_tanggal = [
@@ -375,18 +367,9 @@ def clean_for_supabase(df_matrix_final):
             df_upload["Prorata"],
             errors="coerce"
         )
+        df_upload["Prorata"] = df_upload["Prorata"].dt.total_seconds() / 3600
 
-        df_upload["Prorata"] = (
-            df_upload["Prorata"]
-            .dt.total_seconds() / 3600
-        )
-
-    kolom_upper = [
-        "Project Code",
-        "Tugboat",
-        "Barge",
-        "Nama Customer"
-    ]
+    kolom_upper = ["Project Code", "Tugboat", "Barge", "Nama Customer"]
 
     for col in kolom_upper:
         if col in df_upload.columns:
@@ -397,11 +380,7 @@ def clean_for_supabase(df_matrix_final):
                 .str.upper()
             )
 
-    kolom_port = [
-        "POD Previous",
-        "Port of Loading",
-        "Port of Discharge"
-    ]
+    kolom_port = ["POD Previous", "Port of Loading", "Port of Discharge"]
 
     for col in kolom_port:
         if col in df_upload.columns:
@@ -412,10 +391,7 @@ def clean_for_supabase(df_matrix_final):
                 .str.title()
             )
 
-    numeric_cols = [
-        "Price/ MT",
-        "Feet"
-    ]
+    numeric_cols = ["Price/ MT", "Feet"]
 
     for col in numeric_cols:
         if col in df_upload.columns:
@@ -424,19 +400,7 @@ def clean_for_supabase(df_matrix_final):
                 .astype("string")
                 .str.replace(r"[^0-9.]", "", regex=True)
             )
-
-            df_upload[col] = pd.to_numeric(
-                df_upload[col],
-                errors="coerce"
-            )
-
-    df_upload = df_upload.replace({
-        pd.NA: None,
-        np.nan: None,
-        "nan": None,
-        "None": None,
-        "": None
-    })
+            df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
 
     for col in kolom_tanggal:
         if col in df_upload.columns:
@@ -444,11 +408,19 @@ def clean_for_supabase(df_matrix_final):
                 lambda x: x.isoformat() if pd.notnull(x) else None
             )
 
-    before_rows = len(df_upload)
-    df_upload = df_upload.drop_duplicates()
-    after_rows = len(df_upload)
+    # Hapus duplicate berdasarkan Project Code
+    if "Project Code" in df_upload.columns:
+        before_rows = len(df_upload)
+        df_upload = df_upload.drop_duplicates(
+            subset=["Project Code"],
+            keep="last"
+        )
+        after_rows = len(df_upload)
+        print(f"Duplicate Project Code terhapus: {before_rows - after_rows:,}")
 
-    print(f"Duplicate terhapus: {before_rows - after_rows:,}")
+    # Bersihkan NaN, Inf, -Inf agar aman untuk JSON Supabase
+    df_upload = df_upload.replace([np.inf, -np.inf], None)
+    df_upload = df_upload.astype(object).where(pd.notnull(df_upload), None)
 
     if "ETA POL" in df_upload.columns:
         df_upload = df_upload.sort_values(
@@ -464,10 +436,6 @@ def clean_for_supabase(df_matrix_final):
     return df_upload
 
 
-# =====================================================
-# UPLOAD TO SUPABASE
-# =====================================================
-
 def upload_to_supabase(df_upload):
     print("Menghubungkan ke Supabase...")
 
@@ -478,49 +446,48 @@ def upload_to_supabase(df_upload):
 
     print("Supabase connected.")
 
+    # Bersihkan NaN / Inf / -Inf final sebelum jadi JSON
+    df_upload = df_upload.replace([np.inf, -np.inf], np.nan)
+    df_upload = df_upload.astype(object).where(pd.notnull(df_upload), None)
+
     records = df_upload.to_dict(orient="records")
+
+    for row in records:
+        for key, value in row.items():
+            if pd.isna(value) if not isinstance(value, (list, dict)) else False:
+                row[key] = None
 
     if not records:
         print("Tidak ada data untuk diupload.")
         return
 
-    print(f"Total upload: {len(records):,} rows")
-
-    print("Menghapus data lama...")
-
-    supabase.table(TABLE_NAME) \
-        .delete() \
-        .neq("id", 0) \
-        .execute()
-
-    print("Data lama berhasil dihapus.")
+    print(f"Total upsert: {len(records):,} rows")
 
     batch_size = 500
     total_uploaded = 0
 
-    print("Mulai upload batch...")
+    print("Mulai upsert batch...")
 
     for i in range(0, len(records), batch_size):
         batch = records[i:i + batch_size]
 
         supabase.table(TABLE_NAME) \
-            .insert(batch) \
+            .upsert(batch, on_conflict="Project Code") \
             .execute()
 
         total_uploaded += len(batch)
 
         print(
             f"Batch {(i // batch_size) + 1} "
-            f"berhasil upload {len(batch):,} rows"
+            f"berhasil upsert {len(batch):,} rows"
         )
 
     print("===================================")
-    print("UPLOAD SELESAI")
+    print("UPSERT SELESAI")
     print("===================================")
-    print(f"Total Uploaded: {total_uploaded:,} rows")
+    print(f"Total Upserted: {total_uploaded:,} rows")
     print(f"Table: {TABLE_NAME}")
     print("===================================")
-
 
 # =====================================================
 # MAIN PIPELINE
