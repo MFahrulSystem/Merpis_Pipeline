@@ -10,6 +10,11 @@ from supabase import create_client, Client
 # LOAD ENV FROM GITHUB SECRETS / SYSTEM ENV
 # =====================================================
 
+from dotenv import load_dotenv
+
+# Load local env file
+load_dotenv("environment.env")
+
 MERPIS_API_URL = os.environ["MERPIS_API_URL"]
 MERPIS_API_TOKEN = os.environ["MERPIS_API_TOKEN"]
 
@@ -23,8 +28,8 @@ TABLE_NAME = "monitoring_project"
 # VALIDASI ENV
 # =====================================================
 
-if not MERPIS_TOKEN:
-    raise ValueError("MERPIS_TOKEN belum ditemukan.")
+if not MERPIS_API_TOKEN:
+    raise ValueError("MERPIS_API_TOKEN belum ditemukan.")
 
 if not SUPABASE_URL:
     raise ValueError("SUPABASE_URL belum ditemukan.")
@@ -40,13 +45,13 @@ if not SUPABASE_KEY:
 def fetch_merpis_data():
     headers = {
         "Accept": "application/json",
-        "Authorization": f"Bearer {MERPIS_TOKEN}"
+        "Authorization": f"Bearer {MERPIS_API_TOKEN}"
     }
 
     print("Mengambil data dari API Merpis...")
 
     response = requests.get(
-        API_URL,
+        MERPIS_API_URL,
         headers=headers,
         timeout=120
     )
