@@ -103,6 +103,7 @@ def build_matrix_final(df_flat):
     required_cols = [
         "project",
         "activities",
+        "activitydetail",
         "started_at",
         "eta",
         "projectel.code",
@@ -243,6 +244,46 @@ def build_matrix_final(df_flat):
         .shift(1)
     )
 
+    df_loading = (
+        df[df["activities"] == "5"][["project", "activitydetail"]]
+        .sort_values(by=["project"])
+        .drop_duplicates(subset=["project"], keep="first")
+        .rename(columns={
+            "activitydetail": "Total Cargo Loading"
+        })
+    )
+
+    df_discharge = (
+        df[df["activities"] == "35"][["project", "activitydetail"]]
+        .sort_values(by=["project"])
+        .drop_duplicates(subset=["project"], keep="first")
+        .rename(columns={
+            "activitydetail": "Total Cargo Discharge"
+        })
+    )
+    
+    # =====================================================
+    # MERGE TOTAL CARGO
+    # =====================================================
+
+    df_project_profile = pd.merge(
+        df_project_profile,
+        df_loading,
+        on="project",
+        how="left"
+    )
+
+    df_project_profile = pd.merge(
+        df_project_profile,
+        df_discharge,
+        on="project",
+        how="left"
+    )
+
+    # =====================================================
+    # MERGE MATRIX FINAL
+    # =====================================================
+
     df_matrix_final = pd.merge(
         df_project_profile,
         df_activities_pivoted,
@@ -295,6 +336,7 @@ def build_matrix_final(df_flat):
         "Berthing POL",
         "Loading Start",
         "Loading Complete",
+        "Total Cargo Loading",
         "Cash Off Jetty POL",
         "SKAB / LHV",
         "Document On Board POL",
@@ -307,6 +349,7 @@ def build_matrix_final(df_flat):
         "Berthing POD",
         "Discharge Start",
         "Discharge Complete",
+        "Total Cargo Discharge",
         "Cash Off Jetty POD",
         "Document On Board POD",
         "FAW Sailing To Finish",
@@ -391,7 +434,12 @@ def clean_for_supabase(df_matrix_final):
                 .str.title()
             )
 
-    numeric_cols = ["Price/ MT", "Feet"]
+    numeric_cols = [
+        "Price/ MT",
+        "Feet",
+        "Total Cargo Loading",
+        "Total Cargo Discharge"
+    ]
 
     for col in numeric_cols:
         if col in df_upload.columns:
