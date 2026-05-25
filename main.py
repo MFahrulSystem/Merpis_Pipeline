@@ -356,7 +356,9 @@ def build_matrix_final(df_flat):
         "Actual Arrive Finish",
         "Cleaning Start Finish",
         "Cleaning Target Finish",
-        "Cleaning Complete Finish"
+        "Cleaning Complete Finish",
+        "Revenue",
+        "Total Voyage Days"
     ]
 
     kolom_tersedia = [
@@ -449,6 +451,30 @@ def clean_for_supabase(df_matrix_final):
                 .str.replace(r"[^0-9.]", "", regex=True)
             )
             df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
+
+    # =====================================================
+    # CALCULATED COLUMNS
+    # =====================================================
+
+    if "Price/ MT" in df_upload.columns and "Total Cargo Loading" in df_upload.columns:
+        df_upload["Revenue"] = (
+            df_upload["Price/ MT"] * df_upload["Total Cargo Loading"]
+        )
+
+    if "FAW Sailing To Finish" in df_upload.columns and "Actual Arrive POL" in df_upload.columns:
+        finish_dt = pd.to_datetime(
+            df_upload["FAW Sailing To Finish"],
+            errors="coerce"
+        )
+
+        arrive_pol_dt = pd.to_datetime(
+            df_upload["Actual Arrive POL"],
+            errors="coerce"
+        )
+
+        df_upload["Total Voyage Days"] = (
+            finish_dt - arrive_pol_dt
+        ).dt.total_seconds() / 86400
 
     for col in kolom_tanggal:
         if col in df_upload.columns:
