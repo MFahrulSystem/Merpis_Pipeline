@@ -9,7 +9,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TABLE_NAME = "downtime_at_pod"
 BATCH_SIZE = 500
 
-url = "https://merpis.ptmerahputih.com/api/downtime/4?year=2026&month=&customer=&tugboat=&barge="
+url = "https://merpis.ptmerahputih.com/api/downtime/4?year=&month=&customer=&tugboat=&barge="
 
 if not MERPIS_API_TOKEN:
     raise Exception("MERPIS_API_TOKEN belum tersedia")
