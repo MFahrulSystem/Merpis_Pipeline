@@ -26,4 +26,4 @@ jobs:
           MERPIS_API_TOKEN: ${{ secrets.MERPIS_API_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python sync-downtime_sailing_pod.py
+        run: python sync-downtime_at_pod.py
