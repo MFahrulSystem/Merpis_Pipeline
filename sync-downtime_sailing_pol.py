@@ -6,7 +6,7 @@ from supabase import create_client
 # =========================
 # CONFIG
 # =========================
-MERPIS_TOKEN = os.getenv("MERPIS_API_TOKEN")
+MERPIS_API_TOKEN = os.getenv("MERPIS_API_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -17,13 +17,13 @@ url = "https://merpis.ptmerahputih.com/api/downtime/1?year=&month=&customer=&tug
 
 headers = {
     "Accept": "application/json",
-    "Authorization": f"Bearer {MERPIS_TOKEN}"
+    "Authorization": f"Bearer {MERPIS_API_TOKEN}"
 }
 
 # =========================
 # VALIDASI ENV
 # =========================
-if not MERPIS_TOKEN:
+if not MERPIS_API_TOKEN:
     raise Exception("MERPIS_API_TOKEN belum tersedia di GitHub Secrets")
 
 if not SUPABASE_URL:
