@@ -1,4 +1,4 @@
-name: Sync Downtime Sailing POL
+name: Sync Downtime at pol
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync-downtime:
+  sync-downtime-skab-lhv-faw-pod:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,9 +21,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run downtime pipeline
+      - name: Run downtime at pol pipeline
         env:
+          MERPIS_API_TOKEN: ${{ secrets.MERPIS_API_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          MERPIS_API_TOKEN: ${{ secrets.MERPIS_API_TOKEN }}
-        run: python sync-downtime_sailing_pol.py
+        run: python sync-downtime_at_pol.py
