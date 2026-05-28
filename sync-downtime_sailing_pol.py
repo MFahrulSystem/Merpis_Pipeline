@@ -6,7 +6,7 @@ from supabase import create_client
 # =========================
 # CONFIG
 # =========================
-MERPIS_TOKEN = os.getenv("MERPIS_TOKEN")
+MERPIS_TOKEN = os.getenv("MERPIS_API_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -24,7 +24,7 @@ headers = {
 # VALIDASI ENV
 # =========================
 if not MERPIS_TOKEN:
-    raise Exception("MERPIS_TOKEN belum tersedia di GitHub Secrets")
+    raise Exception("MERPIS_API_TOKEN belum tersedia di GitHub Secrets")
 
 if not SUPABASE_URL:
     raise Exception("SUPABASE_URL belum tersedia di GitHub Secrets")
