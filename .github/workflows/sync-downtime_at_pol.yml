@@ -1,4 +1,4 @@
-name: Sync Downtime at pol
+name: Sync Downtime at POL
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync-downtime-skab-lhv-faw-pod:
+  sync-downtime-at-pol:
     runs-on: ubuntu-latest
 
     steps:
