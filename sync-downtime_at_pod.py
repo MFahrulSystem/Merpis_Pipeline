@@ -11,11 +11,6 @@ BATCH_SIZE = 500
 
 url = "https://merpis.ptmerahputih.com/api/downtime/4?year=2026&month=&customer=&tugboat=&barge="
 
-headers = {
-    "Accept": "application/json",
-    "Authorization": f"Bearer {MERPIS_API_TOKEN}"
-}
-
 if not MERPIS_API_TOKEN:
     raise Exception("MERPIS_API_TOKEN belum tersedia")
 
@@ -25,14 +20,10 @@ if not SUPABASE_URL:
 if not SUPABASE_KEY:
     raise Exception("SUPABASE_KEY belum tersedia")
 
-
-def get_value(row, *keys):
-    for key in keys:
-        value = row.get(key)
-        if value not in [None, ""]:
-            return value
-    return None
-
+headers = {
+    "Accept": "application/json",
+    "Authorization": f"Bearer {MERPIS_API_TOKEN}"
+}
 
 response = requests.get(url, headers=headers, timeout=300)
 
@@ -46,11 +37,6 @@ json_data = response.json()
 data = json_data["data"]["data"]
 
 print("Total Raw Data:", len(data))
-
-# Debug untuk cek nama field asli dari API
-if len(data) > 0:
-    print("Contoh key dari API:")
-    print(data[0].keys())
 
 rows = []
 
@@ -71,28 +57,27 @@ for row in data:
         "customer": customer.get("fullname"),
 
         "prorata": row.get("prorata"),
-        "actual_arrived_pod": get_value(row, "arrivepod", "arrive_pod", "actual_arrived_pod"),
+        "actual_arrived_pod": row.get("arrivepod"),
 
-        "standard_disc_complete": get_value(row, "standarddisccomplete", "standard_disc_complete", "std_disch_complete"),
-        "disc_complete": get_value(row, "disccomplete", "disc_complete", "disch_complete"),
-        "downtime_disc": get_value(row, "downtimedisc", "downtime_disc", "downtime_disch"),
-        "days_disc": get_value(row, "daysdisc", "days_disc"),
-        "department_disc": get_value(row, "departmentdisc", "department_disc", "department"),
-        "category_disc": get_value(row, "categorydisc", "category_disc", "category"),
-        "notes_disc": get_value(row, "notesdisc", "notes_disc", "notes"),
+        "standard_disc_complete": row.get("standarddischargecomplete"),
+        "disc_complete": row.get("dischargecomplete"),
+        "downtime_disc": row.get("downtimedischarge"),
+        "days_disc": row.get("daysdischarge"),
+        "department_disc": row.get("departmentdischarge"),
+        "category_disc": row.get("categorydischarge"),
+        "notes_disc": row.get("notesdischarge"),
 
-        "standard_faw_to_finish": get_value(row, "standardfawtofinish", "standard_faw_to_finish", "std_faw_to_finish"),
-        "faw_to_finish": get_value(row, "fawtofinish", "faw_to_finish"),
-        "downtime_faw_to_finish": get_value(row, "downtimefawtofinish", "downtime_faw_to_finish"),
-        "days_faw_to_finish": get_value(row, "daysfawtofinish", "days_faw_to_finish"),
-        "department_faw_to_finish": get_value(row, "departmentfawtofinish", "department_faw_to_finish"),
-        "category_faw_to_finish": get_value(row, "categoryfawtofinish", "category_faw_to_finish"),
-        "notes_faw_to_finish": get_value(row, "notesfawtofinish", "notes_faw_to_finish")
+        "standard_faw_to_finish": row.get("standardfawsailingtofinish"),
+        "faw_to_finish": row.get("fawsailingtofinish"),
+        "downtime_faw_to_finish": row.get("downtimefawsailingtofinish"),
+        "days_faw_to_finish": row.get("daysfawsailingtofinish"),
+        "department_faw_to_finish": row.get("departmentfawsailingtofinish"),
+        "category_faw_to_finish": row.get("categoryfawsailingtofinish"),
+        "notes_faw_to_finish": row.get("notesfawsailingtofinish")
     })
 
 print("Total Transform Rows:", len(rows))
 
-# Debug isi hasil transform pertama
 if len(rows) > 0:
     print("Contoh hasil transform:")
     print(rows[0])
@@ -105,7 +90,7 @@ for start in range(0, len(rows), BATCH_SIZE):
 
     print(f"Upsert Batch {start} - {min(end, len(rows))}")
 
-    supabase.table(TABLE_NAME).upsert(
+    result = supabase.table(TABLE_NAME).upsert(
         batch,
         on_conflict="id"
     ).execute()
