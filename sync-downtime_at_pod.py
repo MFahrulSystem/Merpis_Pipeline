@@ -6,7 +6,7 @@ MERPIS_API_TOKEN = os.getenv("MERPIS_API_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-TABLE_NAME = "downtime_disc_complete_faw_finish"
+TABLE_NAME = "downtime_at_pod"
 BATCH_SIZE = 500
 
 url = "https://merpis.ptmerahputih.com/api/downtime/4?year=&month=&customer=&tugboat=&barge="
@@ -93,4 +93,4 @@ for start in range(0, len(rows), BATCH_SIZE):
 
     print("Batch berhasil:", len(batch))
 
-print("Selesai upload downtime_disc_complete_faw_finish ke Supabase")
+print("Selesai upload downtime_at_pod ke Supabase")
