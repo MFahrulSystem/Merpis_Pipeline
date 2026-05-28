@@ -9,7 +9,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 TABLE_NAME = "downtime_at_pod"
 BATCH_SIZE = 500
 
-url = "https://merpis.ptmerahputih.com/api/downtime/4?year=&month=&customer=&tugboat=&barge="
+url = "https://merpis.ptmerahputih.com/api/downtime/4?year=2026&month=&customer=&tugboat=&barge="
 
 headers = {
     "Accept": "application/json",
@@ -25,6 +25,15 @@ if not SUPABASE_URL:
 if not SUPABASE_KEY:
     raise Exception("SUPABASE_KEY belum tersedia")
 
+
+def get_value(row, *keys):
+    for key in keys:
+        value = row.get(key)
+        if value not in [None, ""]:
+            return value
+    return None
+
+
 response = requests.get(url, headers=headers, timeout=300)
 
 print("Status Code:", response.status_code)
@@ -37,6 +46,11 @@ json_data = response.json()
 data = json_data["data"]["data"]
 
 print("Total Raw Data:", len(data))
+
+# Debug untuk cek nama field asli dari API
+if len(data) > 0:
+    print("Contoh key dari API:")
+    print(data[0].keys())
 
 rows = []
 
@@ -57,26 +71,31 @@ for row in data:
         "customer": customer.get("fullname"),
 
         "prorata": row.get("prorata"),
-        "actual_arrived_pod": row.get("arrivepod"),
+        "actual_arrived_pod": get_value(row, "arrivepod", "arrive_pod", "actual_arrived_pod"),
 
-        "standard_disc_complete": row.get("standarddisccomplete"),
-        "disc_complete": row.get("disccomplete"),
-        "downtime_disc": row.get("downtimedisc"),
-        "days_disc": row.get("daysdisc"),
-        "department_disc": row.get("departmentdisc"),
-        "category_disc": row.get("categorydisc"),
-        "notes_disc": row.get("notesdisc"),
+        "standard_disc_complete": get_value(row, "standarddisccomplete", "standard_disc_complete", "std_disch_complete"),
+        "disc_complete": get_value(row, "disccomplete", "disc_complete", "disch_complete"),
+        "downtime_disc": get_value(row, "downtimedisc", "downtime_disc", "downtime_disch"),
+        "days_disc": get_value(row, "daysdisc", "days_disc"),
+        "department_disc": get_value(row, "departmentdisc", "department_disc", "department"),
+        "category_disc": get_value(row, "categorydisc", "category_disc", "category"),
+        "notes_disc": get_value(row, "notesdisc", "notes_disc", "notes"),
 
-        "standard_faw_to_finish": row.get("standardfawtofinish"),
-        "faw_to_finish": row.get("fawtofinish"),
-        "downtime_faw_to_finish": row.get("downtimefawtofinish"),
-        "days_faw_to_finish": row.get("daysfawtofinish"),
-        "department_faw_to_finish": row.get("departmentfawtofinish"),
-        "category_faw_to_finish": row.get("categoryfawtofinish"),
-        "notes_faw_to_finish": row.get("notesfawtofinish")
+        "standard_faw_to_finish": get_value(row, "standardfawtofinish", "standard_faw_to_finish", "std_faw_to_finish"),
+        "faw_to_finish": get_value(row, "fawtofinish", "faw_to_finish"),
+        "downtime_faw_to_finish": get_value(row, "downtimefawtofinish", "downtime_faw_to_finish"),
+        "days_faw_to_finish": get_value(row, "daysfawtofinish", "days_faw_to_finish"),
+        "department_faw_to_finish": get_value(row, "departmentfawtofinish", "department_faw_to_finish"),
+        "category_faw_to_finish": get_value(row, "categoryfawtofinish", "category_faw_to_finish"),
+        "notes_faw_to_finish": get_value(row, "notesfawtofinish", "notes_faw_to_finish")
     })
 
 print("Total Transform Rows:", len(rows))
+
+# Debug isi hasil transform pertama
+if len(rows) > 0:
+    print("Contoh hasil transform:")
+    print(rows[0])
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
