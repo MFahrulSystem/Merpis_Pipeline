@@ -1,3 +1,4 @@
+```python
 import os
 import sys
 import requests
@@ -69,6 +70,7 @@ def fetch_merpis_data():
         raise ValueError("Response API tidak memiliki key 'data'.")
 
     print("Data API berhasil diambil.")
+    print(f"Total record API: {len(raw_data['data']):,}")
 
     return raw_data
 
@@ -79,6 +81,13 @@ def fetch_merpis_data():
 
 def flatten_data(raw_data):
     raw_monitoring_list = raw_data["data"]
+
+    if not raw_monitoring_list:
+        raise ValueError(
+            "API mengembalikan data kosong. "
+            "Proses dihentikan agar tabel Supabase tidak terhapus."
+        )
+
     df_items = pd.DataFrame(raw_monitoring_list)
 
     if "monitoring" not in df_items.columns:
@@ -124,7 +133,9 @@ def build_matrix_final(df_flat):
     missing_cols = [c for c in required_cols if c not in df_flat.columns]
 
     if missing_cols:
-        raise ValueError(f"Kolom berikut tidak ditemukan: {missing_cols}")
+        raise ValueError(
+            f"Kolom berikut tidak ditemukan: {missing_cols}"
+        )
 
     df = df_flat.copy()
 
@@ -154,18 +165,30 @@ def build_matrix_final(df_flat):
     df_project_profile = (
         df[profile_cols]
         .sort_values(by=["project", "projectel.started_at"])
-        .drop_duplicates(subset=["project"], keep="first")
+        .drop_duplicates(
+            subset=["project"],
+            keep="first"
+        )
         .reset_index(drop=True)
     )
 
     df_project_profile["Grup_Kapal_Murni"] = (
         df_project_profile["projectel.code"]
         .astype("string")
-        .apply(lambda x: x.split("-")[0] if pd.notna(x) and "-" in x else x)
+        .apply(
+            lambda x:
+                x.split("-")[0]
+                if pd.notna(x) and "-" in x
+                else x
+        )
     )
 
     df_project_profile = df_project_profile.sort_values(
-        by=["Grup_Kapal_Murni", "projectel.started_at", "project"]
+        by=[
+            "Grup_Kapal_Murni",
+            "projectel.started_at",
+            "project"
+        ]
     ).reset_index(drop=True)
 
     mapping_activities = {
@@ -193,8 +216,14 @@ def build_matrix_final(df_flat):
         "43": "Cleaning Complete Finish"
     }
 
-    df_activities = df[df["activities"].isin(mapping_activities.keys())].copy()
-    df_activities["activity_name"] = df_activities["activities"].map(mapping_activities)
+    df_activities = df[
+        df["activities"].isin(mapping_activities.keys())
+    ].copy()
+
+    df_activities["activity_name"] = (
+        df_activities["activities"]
+        .map(mapping_activities)
+    )
 
     df_activities_pivoted = (
         df_activities
@@ -210,11 +239,22 @@ def build_matrix_final(df_flat):
 
     df_activities_pivoted.columns.name = None
 
+    # =====================================================
+    # ETA POD
+    # =====================================================
+
     df_eta_pod = (
-        df[df["activities"] == "10"][["project", "eta"]]
+        df[df["activities"] == "10"][
+            ["project", "eta"]
+        ]
         .sort_values(by=["project", "eta"])
-        .drop_duplicates(subset=["project"], keep="first")
-        .rename(columns={"eta": "ETA POD"})
+        .drop_duplicates(
+            subset=["project"],
+            keep="first"
+        )
+        .rename(columns={
+            "eta": "ETA POD"
+        })
     )
 
     df_project_profile = pd.merge(
@@ -224,11 +264,22 @@ def build_matrix_final(df_flat):
         how="left"
     )
 
+    # =====================================================
+    # ETA POL
+    # =====================================================
+
     df_eta_pol = (
-        df[df["activities"] == "38"][["project", "eta"]]
+        df[df["activities"] == "38"][
+            ["project", "eta"]
+        ]
         .sort_values(by=["project", "eta"])
-        .drop_duplicates(subset=["project"], keep="first")
-        .rename(columns={"eta": "ETA_POL_Mentah"})
+        .drop_duplicates(
+            subset=["project"],
+            keep="first"
+        )
+        .rename(columns={
+            "eta": "ETA_POL_Mentah"
+        })
     )
 
     df_project_profile = pd.merge(
@@ -240,28 +291,48 @@ def build_matrix_final(df_flat):
 
     df_project_profile["ETA POL"] = (
         df_project_profile
-        .groupby("Grup_Kapal_Murni")["ETA_POL_Mentah"]
+        .groupby("Grup_Kapal_Murni")[
+            "ETA_POL_Mentah"
+        ]
         .shift(1)
     )
 
+    # =====================================================
+    # TOTAL CARGO LOADING
+    # =====================================================
+
     df_loading = (
-        df[df["activities"] == "5"][["project", "activitydetail"]]
+        df[df["activities"] == "5"][
+            ["project", "activitydetail"]
+        ]
         .sort_values(by=["project"])
-        .drop_duplicates(subset=["project"], keep="first")
+        .drop_duplicates(
+            subset=["project"],
+            keep="first"
+        )
         .rename(columns={
             "activitydetail": "Total Cargo Loading"
         })
     )
 
+    # =====================================================
+    # TOTAL CARGO DISCHARGE
+    # =====================================================
+
     df_discharge = (
-        df[df["activities"] == "35"][["project", "activitydetail"]]
+        df[df["activities"] == "35"][
+            ["project", "activitydetail"]
+        ]
         .sort_values(by=["project"])
-        .drop_duplicates(subset=["project"], keep="first")
+        .drop_duplicates(
+            subset=["project"],
+            keep="first"
+        )
         .rename(columns={
             "activitydetail": "Total Cargo Discharge"
         })
     )
-    
+
     # =====================================================
     # MERGE TOTAL CARGO
     # =====================================================
@@ -306,7 +377,9 @@ def build_matrix_final(df_flat):
         "projectel.podel.name": "Port of Discharge"
     }
 
-    df_matrix_final = df_matrix_final.rename(columns=rename_columns)
+    df_matrix_final = df_matrix_final.rename(
+        columns=rename_columns
+    )
 
     df_matrix_final = df_matrix_final.drop(
         columns=[
@@ -362,11 +435,14 @@ def build_matrix_final(df_flat):
     ]
 
     kolom_tersedia = [
-        c for c in kolom_final_urut
+        c
+        for c in kolom_final_urut
         if c in df_matrix_final.columns
     ]
 
-    df_matrix_final = df_matrix_final[kolom_tersedia]
+    df_matrix_final = df_matrix_final[
+        kolom_tersedia
+    ]
 
     if "ETA POL" in df_matrix_final.columns:
         df_matrix_final = df_matrix_final.sort_values(
@@ -375,7 +451,9 @@ def build_matrix_final(df_flat):
             na_position="last"
         )
 
-    df_matrix_final = df_matrix_final.reset_index(drop=True)
+    df_matrix_final = df_matrix_final.reset_index(
+        drop=True
+    )
 
     print("Matrix final berhasil dibuat.")
     print(f"Jumlah row: {len(df_matrix_final):,}")
@@ -394,30 +472,67 @@ def clean_for_supabase(df_matrix_final):
     df_upload = df_matrix_final.copy()
 
     keyword_tanggal = [
-        "ETA", "Arrive", "Start", "Complete", "Berthing",
-        "Jetty", "LHV", "Board", "Sailing", "Target"
+        "ETA",
+        "Arrive",
+        "Start",
+        "Complete",
+        "Berthing",
+        "Jetty",
+        "LHV",
+        "Board",
+        "Sailing",
+        "Target"
     ]
 
     kolom_tanggal = [
-        col for col in df_upload.columns
+        col
+        for col in df_upload.columns
         if any(k in col for k in keyword_tanggal)
     ]
 
     for col in kolom_tanggal:
-        df_upload[col] = pd.to_datetime(df_upload[col], errors="coerce")
-        df_upload.loc[df_upload[col].dt.year <= 1970, col] = pd.NaT
+        df_upload[col] = pd.to_datetime(
+            df_upload[col],
+            errors="coerce"
+        )
+
+        df_upload.loc[
+            df_upload[col].dt.year <= 1970,
+            col
+        ] = pd.NaT
+
+    # =====================================================
+    # PRORATA
+    # =====================================================
 
     if "Prorata" in df_upload.columns:
+
         df_upload["Prorata"] = pd.to_timedelta(
             df_upload["Prorata"],
             errors="coerce"
         )
-        df_upload["Prorata"] = df_upload["Prorata"].dt.total_seconds() / 3600
 
-    kolom_upper = ["Project Code", "Tugboat", "Barge", "Nama Customer"]
+        df_upload["Prorata"] = (
+            df_upload["Prorata"]
+            .dt.total_seconds()
+            / 3600
+        )
+
+    # =====================================================
+    # UPPERCASE
+    # =====================================================
+
+    kolom_upper = [
+        "Project Code",
+        "Tugboat",
+        "Barge",
+        "Nama Customer"
+    ]
 
     for col in kolom_upper:
+
         if col in df_upload.columns:
+
             df_upload[col] = (
                 df_upload[col]
                 .astype("string")
@@ -425,16 +540,30 @@ def clean_for_supabase(df_matrix_final):
                 .str.upper()
             )
 
-    kolom_port = ["POD Previous", "Port of Loading", "Port of Discharge"]
+    # =====================================================
+    # TITLE CASE PORT
+    # =====================================================
+
+    kolom_port = [
+        "POD Previous",
+        "Port of Loading",
+        "Port of Discharge"
+    ]
 
     for col in kolom_port:
+
         if col in df_upload.columns:
+
             df_upload[col] = (
                 df_upload[col]
                 .astype("string")
                 .str.strip()
                 .str.title()
             )
+
+    # =====================================================
+    # NUMERIC
+    # =====================================================
 
     numeric_cols = [
         "Price/ MT",
@@ -444,24 +573,46 @@ def clean_for_supabase(df_matrix_final):
     ]
 
     for col in numeric_cols:
+
         if col in df_upload.columns:
+
             df_upload[col] = (
                 df_upload[col]
                 .astype("string")
-                .str.replace(r"[^0-9.]", "", regex=True)
+                .str.replace(
+                    r"[^0-9.]",
+                    "",
+                    regex=True
+                )
             )
-            df_upload[col] = pd.to_numeric(df_upload[col], errors="coerce")
+
+            df_upload[col] = pd.to_numeric(
+                df_upload[col],
+                errors="coerce"
+            )
 
     # =====================================================
     # CALCULATED COLUMNS
     # =====================================================
 
-    if "Price/ MT" in df_upload.columns and "Total Cargo Loading" in df_upload.columns:
+    if (
+        "Price/ MT" in df_upload.columns
+        and
+        "Total Cargo Loading" in df_upload.columns
+    ):
+
         df_upload["Revenue"] = (
-            df_upload["Price/ MT"] * df_upload["Total Cargo Loading"]
+            df_upload["Price/ MT"]
+            *
+            df_upload["Total Cargo Loading"]
         )
 
-    if "FAW Sailing To Finish" in df_upload.columns and "Actual Arrive POL" in df_upload.columns:
+    if (
+        "FAW Sailing To Finish" in df_upload.columns
+        and
+        "Actual Arrive POL" in df_upload.columns
+    ):
+
         finish_dt = pd.to_datetime(
             df_upload["FAW Sailing To Finish"],
             errors="coerce"
@@ -476,41 +627,85 @@ def clean_for_supabase(df_matrix_final):
             finish_dt - arrive_pol_dt
         ).dt.total_seconds() / 86400
 
+    # =====================================================
+    # FORMAT DATE TO ISO
+    # =====================================================
+
     for col in kolom_tanggal:
+
         if col in df_upload.columns:
+
             df_upload[col] = df_upload[col].apply(
-                lambda x: x.isoformat() if pd.notnull(x) else None
+                lambda x:
+                    x.isoformat()
+                    if pd.notnull(x)
+                    else None
             )
 
-    # Hapus duplicate berdasarkan Project Code
+    # =====================================================
+    # REMOVE DUPLICATE PROJECT CODE
+    # =====================================================
+
     if "Project Code" in df_upload.columns:
+
         before_rows = len(df_upload)
+
         df_upload = df_upload.drop_duplicates(
             subset=["Project Code"],
             keep="last"
         )
-        after_rows = len(df_upload)
-        print(f"Duplicate Project Code terhapus: {before_rows - after_rows:,}")
 
-    # Bersihkan NaN, Inf, -Inf agar aman untuk JSON Supabase
-    df_upload = df_upload.replace([np.inf, -np.inf], None)
-    df_upload = df_upload.astype(object).where(pd.notnull(df_upload), None)
+        after_rows = len(df_upload)
+
+        print(
+            f"Duplicate Project Code terhapus: "
+            f"{before_rows - after_rows:,}"
+        )
+
+    # =====================================================
+    # CLEAN NaN / INF
+    # =====================================================
+
+    df_upload = df_upload.replace(
+        [np.inf, -np.inf],
+        None
+    )
+
+    df_upload = df_upload.astype(object).where(
+        pd.notnull(df_upload),
+        None
+    )
+
+    # =====================================================
+    # SORT
+    # =====================================================
 
     if "ETA POL" in df_upload.columns:
+
         df_upload = df_upload.sort_values(
             by="ETA POL",
             na_position="last"
         )
 
-    df_upload = df_upload.reset_index(drop=True)
+    df_upload = df_upload.reset_index(
+        drop=True
+    )
 
     print("Cleansing selesai.")
-    print(f"Total data siap upload: {len(df_upload):,}")
+    print(
+        f"Total data siap upload: "
+        f"{len(df_upload):,}"
+    )
 
     return df_upload
 
 
+# =====================================================
+# FULL REFRESH SUPABASE
+# =====================================================
+
 def upload_to_supabase(df_upload):
+
     print("Menghubungkan ke Supabase...")
 
     supabase: Client = create_client(
@@ -520,67 +715,228 @@ def upload_to_supabase(df_upload):
 
     print("Supabase connected.")
 
-    # Bersihkan NaN / Inf / -Inf final sebelum jadi JSON
-    df_upload = df_upload.replace([np.inf, -np.inf], np.nan)
-    df_upload = df_upload.astype(object).where(pd.notnull(df_upload), None)
+    # =====================================================
+    # VALIDASI DATA
+    # =====================================================
 
-    records = df_upload.to_dict(orient="records")
+    if df_upload is None or df_upload.empty:
 
-    for row in records:
-        for key, value in row.items():
-            if pd.isna(value) if not isinstance(value, (list, dict)) else False:
-                row[key] = None
+        raise ValueError(
+            "Data hasil processing kosong. "
+            "Proses DELETE dibatalkan."
+        )
+
+    if "Project Code" not in df_upload.columns:
+
+        raise ValueError(
+            "Kolom 'Project Code' tidak ditemukan. "
+            "Proses DELETE dibatalkan."
+        )
+
+    # Bersihkan NaN / Inf final
+    df_upload = df_upload.replace(
+        [np.inf, -np.inf],
+        np.nan
+    )
+
+    df_upload = df_upload.astype(object).where(
+        pd.notnull(df_upload),
+        None
+    )
+
+    records = df_upload.to_dict(
+        orient="records"
+    )
+
+    # =====================================================
+    # VALIDASI RECORD
+    # =====================================================
 
     if not records:
-        print("Tidak ada data untuk diupload.")
-        return
 
-    print(f"Total upsert: {len(records):,} rows")
+        raise ValueError(
+            "Tidak ada record untuk diupload. "
+            "Proses DELETE dibatalkan."
+        )
+
+    print(
+        f"Total data dari API yang siap "
+        f"disimpan: {len(records):,} rows"
+    )
+
+    # =====================================================
+    # CEK PROJECT CODE
+    # =====================================================
+
+    project_codes = [
+        row.get("Project Code")
+        for row in records
+        if row.get("Project Code")
+    ]
+
+    if not project_codes:
+
+        raise ValueError(
+            "Tidak ada Project Code valid. "
+            "Proses DELETE dibatalkan."
+        )
+
+    print(
+        f"Project Code valid: "
+        f"{len(project_codes):,}"
+    )
+
+    # =====================================================
+    # DELETE DATA LAMA
+    # =====================================================
+
+    print("===================================")
+    print("FULL REFRESH SUPABASE")
+    print("===================================")
+
+    print(
+        f"Menghapus seluruh data lama "
+        f"dari table: {TABLE_NAME}"
+    )
+
+    try:
+
+        # Filter neq digunakan agar Supabase
+        # menjalankan DELETE terhadap seluruh row
+        supabase.table(TABLE_NAME) \
+            .delete() \
+            .neq("Project Code", "") \
+            .execute()
+
+    except Exception as e:
+
+        raise Exception(
+            "Gagal menghapus data lama dari "
+            f"Supabase: {str(e)}"
+        )
+
+    print("Data lama berhasil dihapus.")
+
+    # =====================================================
+    # INSERT DATA BARU
+    # =====================================================
 
     batch_size = 500
     total_uploaded = 0
+    total_batches = (
+        (len(records) + batch_size - 1)
+        // batch_size
+    )
 
-    print("Mulai upsert batch...")
+    print(
+        f"Mulai insert data baru "
+        f"dalam {total_batches} batch..."
+    )
 
-    for i in range(0, len(records), batch_size):
-        batch = records[i:i + batch_size]
+    try:
 
-        supabase.table(TABLE_NAME) \
-            .upsert(batch, on_conflict="Project Code") \
-            .execute()
+        for i in range(
+            0,
+            len(records),
+            batch_size
+        ):
 
-        total_uploaded += len(batch)
+            batch = records[
+                i:i + batch_size
+            ]
 
-        print(
-            f"Batch {(i // batch_size) + 1} "
-            f"berhasil upsert {len(batch):,} rows"
+            supabase.table(TABLE_NAME) \
+                .insert(batch) \
+                .execute()
+
+            total_uploaded += len(batch)
+
+            print(
+                f"Batch {(i // batch_size) + 1}/"
+                f"{total_batches} "
+                f"berhasil insert "
+                f"{len(batch):,} rows"
+            )
+
+    except Exception as e:
+
+        print("===================================")
+        print("INSERT GAGAL")
+        print("===================================")
+        print(str(e))
+
+        raise Exception(
+            "Proses insert ke Supabase gagal. "
+            "Table mungkin hanya terisi sebagian. "
+            f"Detail: {str(e)}"
         )
 
+    # =====================================================
+    # RESULT
+    # =====================================================
+
     print("===================================")
-    print("UPSERT SELESAI")
+    print("FULL REFRESH SELESAI")
     print("===================================")
-    print(f"Total Upserted: {total_uploaded:,} rows")
-    print(f"Table: {TABLE_NAME}")
+    print(f"Table          : {TABLE_NAME}")
+    print(f"Data dari API  : {len(records):,} rows")
+    print(f"Data inserted  : {total_uploaded:,} rows")
     print("===================================")
+
 
 # =====================================================
 # MAIN PIPELINE
 # =====================================================
 
 def main():
-    raw_data = fetch_merpis_data()
-    df_flat = flatten_data(raw_data)
-    df_matrix_final = build_matrix_final(df_flat)
-    df_upload = clean_for_supabase(df_matrix_final)
-    upload_to_supabase(df_upload)
 
+    print("===================================")
+    print("MERPIS MONITORING DATA PIPELINE")
+    print("===================================")
+
+    # 1. FETCH API
+    raw_data = fetch_merpis_data()
+
+    # 2. FLATTEN
+    df_flat = flatten_data(raw_data)
+
+    # 3. BUILD MATRIX
+    df_matrix_final = build_matrix_final(
+        df_flat
+    )
+
+    # 4. CLEAN
+    df_upload = clean_for_supabase(
+        df_matrix_final
+    )
+
+    # 5. FULL REFRESH SUPABASE
+    upload_to_supabase(
+        df_upload
+    )
+
+    print("===================================")
+    print("PIPELINE BERHASIL")
+    print("===================================")
+
+
+# =====================================================
+# EXECUTION
+# =====================================================
 
 if __name__ == "__main__":
+
     try:
+
         main()
+
     except Exception as e:
+
         print("===================================")
         print("PIPELINE GAGAL")
         print("===================================")
         print(str(e))
+        print("===================================")
+
         sys.exit(1)
+```
