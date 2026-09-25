@@ -594,17 +594,24 @@ def clean_for_supabase(df_matrix_final):
     # CALCULATED COLUMNS
     # =====================================================
 
-    if (
-        "Price/ MT" in df_upload.columns
-        and
-        "Total Cargo Loading" in df_upload.columns
-    ):
+if (
+    "Price/ MT" in df_upload.columns
+    and
+    "Total Cargo Loading" in df_upload.columns
+):
 
-        df_upload["Revenue"] = (
-            df_upload["Price/ MT"]
-            *
-            df_upload["Total Cargo Loading"]
-        )
+    # Hitung Revenue normal
+    df_upload["Revenue"] = (
+        df_upload["Price/ MT"]
+        *
+        df_upload["Total Cargo Loading"]
+    )
+
+    # Khusus ID 871900
+    df_upload.loc[
+        df_upload["ID"].astype(str) == "871900",
+        "Revenue"
+    ] = 180000000
 
     if (
         "FAW Sailing To Finish" in df_upload.columns
