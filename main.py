@@ -594,11 +594,11 @@ def clean_for_supabase(df_matrix_final):
     # CALCULATED COLUMNS
     # =====================================================
 
-if (
+    if (
     "Price/ MT" in df_upload.columns
     and
     "Total Cargo Loading" in df_upload.columns
-):
+    ):
 
     # Hitung Revenue normal
     df_upload["Revenue"] = (
