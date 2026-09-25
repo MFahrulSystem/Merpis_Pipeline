@@ -591,6 +591,29 @@ def clean_for_supabase(df_matrix_final):
             )
 
     # =====================================================
+    # REMOVE DUPLICATE PROJECT CODE
+    # (dipindahkan ke sini, SEBELUM kalkulasi Revenue,
+    #  supaya override manual di bawah tidak ketiban/kehapus
+    #  oleh proses dedup)
+    # =====================================================
+
+    if "Project Code" in df_upload.columns:
+
+        before_rows = len(df_upload)
+
+        df_upload = df_upload.drop_duplicates(
+            subset=["Project Code"],
+            keep="last"
+        )
+
+        after_rows = len(df_upload)
+
+        print(
+            f"Duplicate Project Code terhapus: "
+            f"{before_rows - after_rows:,}"
+        )
+
+    # =====================================================
     # CALCULATED COLUMNS
     # =====================================================
 
@@ -600,14 +623,14 @@ def clean_for_supabase(df_matrix_final):
         "Total Cargo Loading" in df_upload.columns
     ):
 
-        # Hitung Revenue normal
+        # Hitung Revenue normal untuk semua project
         df_upload["Revenue"] = (
             df_upload["Price/ MT"]
             *
             df_upload["Total Cargo Loading"]
         )
 
-        # Khusus Project Code BG.MP31-2026-014
+        # Override manual — HANYA untuk Project Code ini
         df_upload.loc[
             df_upload["Project Code"].astype(str) == "BG.MP31-2026-014",
             "Revenue"
@@ -647,26 +670,6 @@ def clean_for_supabase(df_matrix_final):
                     if pd.notnull(x)
                     else None
             )
-
-    # =====================================================
-    # REMOVE DUPLICATE PROJECT CODE
-    # =====================================================
-
-    if "Project Code" in df_upload.columns:
-
-        before_rows = len(df_upload)
-
-        df_upload = df_upload.drop_duplicates(
-            subset=["Project Code"],
-            keep="last"
-        )
-
-        after_rows = len(df_upload)
-
-        print(
-            f"Duplicate Project Code terhapus: "
-            f"{before_rows - after_rows:,}"
-        )
 
     # =====================================================
     # CLEAN NaN / INF
