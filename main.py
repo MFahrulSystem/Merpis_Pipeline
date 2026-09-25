@@ -609,7 +609,7 @@ def clean_for_supabase(df_matrix_final):
 
     # Khusus ID 871900
     df_upload.loc[
-        df_upload["ID"].astype(str) == "871900",
+        df_upload["Project Code"].astype(str) == "BG.MP31-2026-014",
         "Revenue"
     ] = 180000000
 
