@@ -361,53 +361,6 @@ def build_matrix_final(df_flat):
         how="left"
     )
 
-    # =====================================================
-    # VOYAGE V.2
-    # =====================================================
-
-    if ("Actual Arrive POD" in df_matrix_final.columns
-        and
-        "Project Code" in df_matrix_final.columns
-        ):
-
-        kode = (df_matrix_final["Project Code"]
-            .astype("string")
-            .str.strip()
-            .str.upper()
-        )
-
-        kode_split = kode.str.extract(r"^(.*)-(\d+)$")
-        
-        arrive_pod = pd.to_datetime(
-            df_matrix_final["Actual Arrive POD"],
-            errors="coerce"
-        )
-
-        arrive_pod = arrive_pod.where(
-            arrive_pod.dt.year > 1970
-        )
-
-        df_trip = pd.DataFrame({
-            "grup": kode_split[0],
-            "trip": pd.to_numeric(
-                kode_split[1],
-                errors="coerce"
-            ),
-            "arrive": arrive_pod
-        }).sort_values(["grup", "trip"])
-
-        prev_arrive = (
-            df_trip
-            .groupby("grup")["arrive"]
-            .shift(1)
-        )
-
-        df_matrix_final["Voyage V.2"] = (
-            (df_trip["arrive"] - prev_arrive)
-            .dt.total_seconds() / 86400
-        )
-        
-
     rename_columns = {
         "projectel.code": "Project Code",
         "projectel.customerel.fullname": "Nama Customer",
@@ -426,6 +379,66 @@ def build_matrix_final(df_flat):
     df_matrix_final = df_matrix_final.rename(
         columns=rename_columns
     )
+
+    # =====================================================
+    # VOYAGE V.2
+    # Sumber: FAW Sailing To Finish
+    # Rumus : FAW Sailing To Finish (trip ini)
+    #         - FAW Sailing To Finish (trip sebelumnya, grup sama)
+    # (harus SETELAH rename, karena butuh kolom "Project Code")
+    # =====================================================
+
+    if (
+        "FAW Sailing To Finish" in df_matrix_final.columns
+        and
+        "Project Code" in df_matrix_final.columns
+    ):
+
+        kode = (
+            df_matrix_final["Project Code"]
+            .astype("string")
+            .str.strip()
+            .str.upper()
+        )
+
+        # BG.AB01-2026-002 -> grup: BG.AB01-2026 | trip: 2
+        kode_split = kode.str.extract(r"^(.*)-(\d+)$")
+
+        faw_finish = pd.to_datetime(
+            df_matrix_final["FAW Sailing To Finish"],
+            errors="coerce"
+        )
+
+        faw_finish = faw_finish.where(
+            faw_finish.dt.year > 1970
+        )
+
+        df_trip = pd.DataFrame({
+            "grup": kode_split[0],
+            "trip": pd.to_numeric(
+                kode_split[1],
+                errors="coerce"
+            ),
+            "faw": faw_finish
+        }).sort_values(["grup", "trip"])
+
+        prev_faw = (
+            df_trip
+            .groupby("grup")["faw"]
+            .shift(1)
+        )
+
+        df_matrix_final["Voyage V.2"] = (
+            (df_trip["faw"] - prev_faw)
+            .dt.total_seconds() / 86400
+        )
+
+    else:
+        print(
+            "PERINGATAN: Voyage V.2 dilewati, kolom "
+            "'FAW Sailing To Finish' atau 'Project Code' "
+            "tidak ditemukan."
+        )
 
     df_matrix_final = df_matrix_final.drop(
         columns=[
@@ -967,6 +980,17 @@ def main():
         df_matrix_final
     )
 
+    # Cek hasil Voyage V.2 di log
+    if "Voyage V.2" in df_upload.columns:
+        print(
+            "Voyage V.2 terisi:",
+            df_upload["Voyage V.2"].notna().sum(),
+            "dari",
+            len(df_upload)
+        )
+    else:
+        print("PERINGATAN: kolom Voyage V.2 tidak ada di data upload.")
+
     # 5. FULL REFRESH SUPABASE
     upload_to_supabase(
         df_upload
@@ -996,5 +1020,3 @@ if __name__ == "__main__":
         print("===================================")
 
         sys.exit(1)
-
-        
