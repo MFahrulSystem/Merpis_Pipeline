@@ -361,6 +361,48 @@ def build_matrix_final(df_flat):
         how="left"
     )
 
+    # =====================================================
+    # VOYAGE V.2
+    # =====================================================
+
+    if ("Actual Arrive POD" in df_matrix_final.columns:
+        and
+        "Project Code" in df_matrix_final
+        ):
+        kode = (df_matrix_final["Project Code"]
+            .astype("string")
+            .str.strip()
+            .str.upper())
+
+        kode_split = kode.str.extract(r"^(.*)-(\d+)$")
+        arrive_pod = pd.to_datetime(
+            df_matrix_final["Actual Arrive POD"],
+            errors="coerce")
+
+        arrive_pod = arrive.pod.where(
+            arrive_pod.dt.year > 1970)
+
+        df_trip = pd.DataFrame({
+            "grup": kode_split[0]
+            "trip": pd.to_numeric(
+                kode_split[1],
+                errors="coerce"
+            ),
+            "arrive": arrive_pod
+        }).sort_values(["grup", "trip"])
+
+        prev_arrive = (
+            df_trip
+            .groupby("grup")["arrive"]
+            .shift(1)
+        )
+
+        df_matrix_final["Voyage V.2"] = (
+            (df_trip["arrive"] - prev_arrive)
+            .dt.total_seconds() / 86400
+        )
+        
+
     rename_columns = {
         "projectel.code": "Project Code",
         "projectel.customerel.fullname": "Nama Customer",
@@ -430,7 +472,8 @@ def build_matrix_final(df_flat):
         "Cleaning Target Finish",
         "Cleaning Complete Finish",
         "Revenue",
-        "Total Voyage Days"
+        "Total Voyage Days",
+        "Voyage V.2"
     ]
 
     kolom_tersedia = [
@@ -948,3 +991,5 @@ if __name__ == "__main__":
         print("===================================")
 
         sys.exit(1)
+
+        
