@@ -365,25 +365,30 @@ def build_matrix_final(df_flat):
     # VOYAGE V.2
     # =====================================================
 
-    if ("Actual Arrive POD" in df_matrix_final.columns:
+    if ("Actual Arrive POD" in df_matrix_final.columns
         and
-        "Project Code" in df_matrix_final
+        "Project Code" in df_matrix_final.columns
         ):
+
         kode = (df_matrix_final["Project Code"]
             .astype("string")
             .str.strip()
-            .str.upper())
+            .str.upper()
+        )
 
         kode_split = kode.str.extract(r"^(.*)-(\d+)$")
+        
         arrive_pod = pd.to_datetime(
             df_matrix_final["Actual Arrive POD"],
-            errors="coerce")
+            errors="coerce"
+        )
 
         arrive_pod = arrive.pod.where(
-            arrive_pod.dt.year > 1970)
+            arrive_pod.dt.year > 1970
+        )
 
         df_trip = pd.DataFrame({
-            "grup": kode_split[0]
+            "grup": kode_split[0],
             "trip": pd.to_numeric(
                 kode_split[1],
                 errors="coerce"
