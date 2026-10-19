@@ -383,7 +383,7 @@ def build_matrix_final(df_flat):
             errors="coerce"
         )
 
-        arrive_pod = arrive.pod.where(
+        arrive_pod = arrive_pod.where(
             arrive_pod.dt.year > 1970
         )
 
