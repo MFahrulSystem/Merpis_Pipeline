@@ -691,11 +691,18 @@ def clean_for_supabase(df_matrix_final):
             df_upload["Total Cargo Loading"]
         )
 
-        # Override manual — HANYA untuk Project Code ini
-        df_upload.loc[
-            df_upload["Project Code"].astype(str) == "BG.MP31-2026-014",
-            "Revenue"
-        ] = 180000000
+        # Override manual: HANYA untuk Project Code di dict ini
+        MANUAL_REVENUE = {
+            "BG.MP31-2026-014": 180000000,
+            "BG.MP31-2026-016": 300000000,
+            "BG.MP31-2026-017": 180000000,
+            "BG.MP31-2026-018": 240000000
+        }
+
+        project_code = df_upload["Project Code"].astype(str).str.strip()
+
+        for code, value in MANUAL_REVENUE.items():
+            df_upload.loc[project_code == code, "Revenue"] = value
 
     if (
         "FAW Sailing To Finish" in df_upload.columns
