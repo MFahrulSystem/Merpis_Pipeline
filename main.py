@@ -960,6 +960,176 @@ def upload_to_supabase(df_upload):
     print(f"Data inserted  : {total_uploaded:,} rows")
     print("===================================")
 
+# ===============================================================
+# TABEL TURNAROUND (TRIP SAAT INI DIHUBUNGKAN KE TRIP SEBELUMNYA)
+# ===============================================================
+
+TABLE_TURNAROUND = "monitoring_turnaround"
+
+KOLOM_IDENTITAS = [
+    "Project Code",
+    "Tugboat",
+    "Barge",
+    "Port of Loading",
+    "Port of Discharge"
+]
+
+KOLOM_T1 = [
+    "FAW Sailing To Finish",
+    "Actual Arrive Finish",
+    "Cleaning Start Finish",
+    "Cleaning Target Finish",
+    "Cleaning Complete Finish"
+]
+
+KOLOM_T2 = [
+    "ETA POL",
+    "Actual Arrive POL",
+    "Berthing POL",
+    "Loading Start",
+    "Loading Complete",
+    "Cash Off Jetty POL",
+    "SKAB / LHV",
+    "Document On Board POL",
+    "FAW Sailing To POD",
+    "Cleaning Start POL",
+    "Cleaning Target POL",
+    "Cleaning Complete POL",
+    "ETA POD",
+    "Actual Arrive POD",
+    "Berthing POD",
+    "Discharge Start",
+    "Discharge Complete",
+    "Cash Off Jetty POD",
+    "Document On Board POD",
+    "FAW Sailing To Finish",
+    "Total Cargo Loading",
+    "Total Cargo Discharge",
+    "Revenue",
+    "Total Voyage Days"
+]
+
+
+def build_turnaround(df_upload):
+
+    print("Membentuk tabel turnaround (Trip 1 + Trip 2)...")
+
+    df = df_upload.copy()
+
+    # BG.AB01-2026-002 -> grup: BG.AB01-2026 | trip: 2
+    kode = (
+        df["Project Code"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+
+    kode_split = kode.str.extract(r"^(.*)-(\d+)$")
+
+    # Kode yang tidak cocok pola dianggap trip 1 di grupnya sendiri
+    df["_grup"] = kode_split[0].fillna(kode)
+    df["_trip"] = pd.to_numeric(
+        kode_split[1],
+        errors="coerce"
+    ).fillna(1)
+
+    df = df.sort_values(
+        ["_grup", "_trip"]
+    ).reset_index(drop=True)
+
+    grp = df.groupby("_grup")
+
+    out = pd.DataFrame(index=df.index)
+
+    # Identitas
+    for c in KOLOM_IDENTITAS:
+        out[c] = df[c] if c in df.columns else None
+
+    # Trip 1 = baris sebelumnya di grup yang sama
+    out["T1 Project Code"] = grp["Project Code"].shift(1)
+
+    for c in KOLOM_T1:
+        out[f"T1 {c}"] = (
+            grp[c].shift(1)
+            if c in df.columns
+            else None
+        )
+
+    # Trip 2 = baris itu sendiri
+    for c in KOLOM_T2:
+        out[f"T2 {c}"] = (
+            df[c]
+            if c in df.columns
+            else None
+        )
+
+    kolom_urut = (
+        KOLOM_IDENTITAS
+        + ["T1 Project Code"]
+        + [f"T1 {c}" for c in KOLOM_T1]
+        + [f"T2 {c}" for c in KOLOM_T2]
+    )
+
+    out = out[kolom_urut]
+
+    out = out.replace([np.inf, -np.inf], np.nan)
+
+    out = out.astype(object).where(
+        pd.notnull(out),
+        None
+    )
+
+    print(
+        f"Turnaround siap: {len(out):,} baris | "
+        f"T1 terisi: {out['T1 Project Code'].notna().sum():,}"
+    )
+
+    return out
+
+
+def upload_turnaround(df_turnaround):
+
+    if df_turnaround is None or df_turnaround.empty:
+        raise ValueError(
+            "Data turnaround kosong. Upload dibatalkan."
+        )
+
+    supabase: Client = create_client(
+        SUPABASE_URL,
+        SUPABASE_KEY
+    )
+
+    records = df_turnaround.to_dict(
+        orient="records"
+    )
+
+    batch_size = 500
+    total_batches = (
+        (len(records) + batch_size - 1)
+        // batch_size
+    )
+
+    print(
+        f"Upsert ke table {TABLE_TURNAROUND}: "
+        f"{len(records):,} rows dalam {total_batches} batch..."
+    )
+
+    for i in range(0, len(records), batch_size):
+
+        batch = records[i:i + batch_size]
+
+        supabase.table(TABLE_TURNAROUND) \
+            .upsert(batch) \
+            .execute()
+
+        print(
+            f"Batch {(i // batch_size) + 1}/"
+            f"{total_batches} "
+            f"berhasil upsert {len(batch):,} rows"
+        )
+
+    print("Upload turnaround selesai.")
+
 
 # =====================================================
 # MAIN PIPELINE
@@ -1002,6 +1172,10 @@ def main():
     upload_to_supabase(
         df_upload
     )
+
+    # 6. TABEL TURNAROUND (Trip 1 + Trip 2)
+    df_turnaround = build_turnaround(df_upload)
+    upload_turnaround(df_turnaround)
 
     print("===================================")
     print("PIPELINE BERHASIL")
