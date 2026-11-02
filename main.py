@@ -1,5 +1,9 @@
 import os
 import sys
+import re
+import json
+import time
+from datetime import datetime, timezone
 import requests
 import pandas as pd
 import numpy as np
@@ -43,9 +47,16 @@ if not SUPABASE_KEY:
 # =====================================================
 
 def fetch_merpis_data():
+
+    # Aman untuk secret yang berisi "Bearer xxx" maupun hanya "xxx"
+    token = MERPIS_API_TOKEN.strip()
+
+    if not token.lower().startswith("bearer "):
+        token = f"Bearer {token}"
+
     headers = {
         "Accept": "application/json",
-        "Authorization": f"Bearer {MERPIS_API_TOKEN}"
+        "Authorization": token
     }
 
     print("Mengambil data dari API Merpis...")
@@ -691,14 +702,7 @@ def clean_for_supabase(df_matrix_final):
             df_upload["Total Cargo Loading"]
         )
 
-        # Override manual: HANYA untuk Project Code di dict ini
-        MANUAL_REVENUE = {
-            "BG.MP31-2026-014": 180000000,
-            "BG.MP31-2026-016": 300000000,
-            "BG.MP31-2026-017": 180000000,
-            "BG.MP31-2026-018": 240000000
-        }
-
+        # Override manual: dict MANUAL_REVENUE (didefinisikan di atas v2_build)
         project_code = df_upload["Project Code"].astype(str).str.strip()
 
         for code, value in MANUAL_REVENUE.items():
@@ -1168,6 +1172,561 @@ def upload_turnaround(df_turnaround):
 
     print("Upload turnaround selesai.")
 
+# ===============================================================
+# TURNAROUND V2
+# 1 baris per project: info project + T1 (2 kolom) + T2 (semua aktivitas)
+# + ETA POL, ETA POD, Total Cargo Loading/Discharge, Revenue
+# Tabel: monitoring_turnaround_v2 -> upsert + hapus baris yatim
+# (tabel monitoring_turnaround lama tidak disentuh)
+# ===============================================================
+
+V2_TABLE = os.environ.get("V2_TABLE", "monitoring_turnaround_v2")
+V2_KEY = "project_code"
+V2_BATCH = 200
+V2_MIN_RATIO = 0.90     # guard: jumlah baru minimal 90% dari isi tabel
+V2_DRY_RUN = os.environ.get("V2_DRY_RUN", "false").lower() in ("1", "true", "yes")
+
+V2_DETAIL = [
+    "activitydetail", "speed", "rpm", "eta",
+    "remainingdistance", "cargoremarks"
+]
+
+V2_PROJ_COLS = [
+    "id", "code", "remarks", "owner", "started_at", "expected_at",
+    "closed_at", "closed_by", "tugboatel.name", "bargeel.name",
+    "bargeel.feet", "tugboatel.feet", "customerel.shortname",
+    "customerel.fullname", "cargoel.name", "polel.name", "polel.shortname",
+    "podel.name", "podel.shortname", "podpreviousel.name", "spal", "si",
+    "sidate", "price", "prorata", "bbm", "demmurage", "ondemmurage",
+    "sapb1", "projectremarks", "polagen", "podagen",
+    "polstartdemmurage", "polenddemmurage",
+    "podstartdemmurage", "podenddemmurage", "downtimeamount"
+]
+
+V2_BASE = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{V2_TABLE}"
+V2_HDR = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json"
+}
+
+# Override Revenue manual (sumber tunggal: dipakai clean_for_supabase & V2)
+MANUAL_REVENUE = {
+    "BG.MP31-2026-014": 180000000,
+    "BG.MP31-2026-016": 300000000,
+    "BG.MP31-2026-017": 180000000,
+    "BG.MP31-2026-018": 240000000
+}
+
+
+def v2_clean_num(s):
+    """Sama seperti cleansing numerik lama: buang semua selain angka dan titik."""
+
+    def conv(x):
+        if x is None or x is pd.NA:
+            return np.nan
+        if isinstance(x, float) and np.isnan(x):
+            return np.nan
+        t = re.sub(r"[^0-9.]", "", str(x))
+        try:
+            return float(t)
+        except ValueError:
+            return np.nan
+
+    return s.map(conv).astype("float64")
+
+
+def v2_build(records):
+
+    ev_rows, proj = [], {}
+
+    for r in records:
+        p = r.get("projectel") or {}
+        a = r.get("activitiesel") or {}
+
+        ev = {
+            k: v for k, v in r.items()
+            if k not in ("projectel", "activitiesel")
+        }
+        ev["activity_port"] = a.get("port")
+        ev["activity_name"] = a.get("name")
+        ev_rows.append(ev)
+
+        if p:
+            proj[p["id"]] = p
+
+    df_ev = pd.DataFrame(ev_rows)
+    df_proj = pd.json_normalize(list(proj.values()), sep=".")
+    df_ev["started_at"] = pd.to_datetime(df_ev["started_at"], errors="coerce")
+
+    # ---- pivot aktivitas per project ----
+    ev = df_ev.dropna(subset=["activity_name"]).copy()
+    ev["act"] = ev["activity_port"] + " | " + ev["activity_name"]
+    ev = ev.sort_values(["project", "started_at", "id"])
+
+    g = ev.groupby(["project", "act"])
+    res = (
+        g.agg(
+            Start=("started_at", "first"),
+            Last=("started_at", "last"),
+            Count=("id", "size")
+        )
+        .join(g[V2_DETAIL].last())
+        .reset_index()
+    )
+
+    order = (
+        ev.drop_duplicates("act")
+        .sort_values("activities")["act"]
+        .tolist()
+    )
+
+    parts = []
+    for act in order:
+        s = res[res["act"] == act].set_index("project")
+        b = pd.DataFrame(index=s.index)
+        b[f"{act} | Start"] = s["Start"]
+
+        if s["Count"].max() > 1:
+            b[f"{act} | Last"] = s["Last"]
+            b[f"{act} | Count"] = s["Count"]
+
+        for c in V2_DETAIL:
+            if s[c].notna().any():
+                b[f"{act} | {c}"] = s[c]
+
+        parts.append(b)
+
+    wide = pd.concat(parts, axis=1)
+
+    # ---- info project ----
+    cols = [c for c in V2_PROJ_COLS if c in df_proj.columns]
+    info = (
+        df_proj[cols]
+        .rename(columns={"id": "project_id", "code": "Project Code"})
+        .copy()
+    )
+
+    # ---- T1 = trip sebelumnya (lintas tahun), hanya 2 kolom ----
+    pat = info["Project Code"].str.extract(r"^(.*)-(\d{4})-(\d+)$")
+    info["_prefix"] = pat[0]
+    info["_year"] = pat[1].astype(float)
+    info["_trip"] = pat[2].astype(float)
+
+    info = info.sort_values(
+        ["_prefix", "_year", "_trip"]
+    ).reset_index(drop=True)
+
+    info["T1 Project Code"] = info.groupby("_prefix")["Project Code"].shift(1)
+    info["_prev_id"] = info.groupby("_prefix")["project_id"].shift(1)
+
+    t1_src = {
+        "T1 FAW Sailing To Finish": "POD | FAW Sailing To Finish | Start",
+        "T1 Actual Arrive Finish": "Finish | Actual Arrive Finish | Start"
+    }
+
+    for new, src in t1_src.items():
+        info[new] = (
+            info["_prev_id"].map(wide[src])
+            if src in wide.columns
+            else pd.NaT
+        )
+
+    # ---- ETA, Total Cargo, Revenue (rumus sama dengan tabel lama) ----
+    act_no = pd.to_numeric(df_ev["activities"], errors="coerce")
+
+    # ETA POD = ETA paling awal dari aktivitas 10 (FAW Sailing To POD)
+    e_pod = df_ev[act_no == 10][["project", "eta"]].copy()
+    e_pod["eta"] = v2_to_dt(e_pod["eta"])
+    e_pod = (
+        e_pod.sort_values(["project", "eta"])
+        .drop_duplicates("project", keep="first")
+        .set_index("project")["eta"]
+    )
+
+    # ETA POL = ETA paling awal dari aktivitas 38 (FAW Sailing To Finish)
+    # milik TRIP SEBELUMNYA (kapal yang sama)
+    e_fin = df_ev[act_no == 38][["project", "eta"]].copy()
+    e_fin["eta"] = v2_to_dt(e_fin["eta"])
+    e_fin = (
+        e_fin.sort_values(["project", "eta"])
+        .drop_duplicates("project", keep="first")
+        .set_index("project")["eta"]
+    )
+
+    # Total Cargo = activitydetail pertama dari Loading Complete (5)
+    # dan Discharge Complete (35)
+    def first_detail(a):
+        d = (
+            df_ev[act_no == a][["project", "activitydetail"]]
+            .drop_duplicates("project", keep="first")
+            .set_index("project")["activitydetail"]
+        )
+        return info["project_id"].map(d)
+
+    info["T2 ETA POL"] = info["_prev_id"].map(e_fin)
+    info["T2 ETA POD"] = info["project_id"].map(e_pod)
+    info["T2 Total Cargo Loading"] = v2_clean_num(first_detail(5))
+    info["T2 Total Cargo Discharge"] = v2_clean_num(first_detail(35))
+
+    # Revenue = Price/MT x Total Cargo Loading, lalu override manual
+    info["T2 Revenue"] = (
+        v2_clean_num(info["price"]) * info["T2 Total Cargo Loading"]
+    )
+
+    kode_up = info["Project Code"].astype(str).str.strip().str.upper()
+    for kode, nilai in MANUAL_REVENUE.items():
+        info.loc[kode_up == kode, "T2 Revenue"] = nilai
+
+    df = (
+        info.drop(columns=["_prefix", "_year", "_trip", "_prev_id"])
+        .merge(
+            wide.add_prefix("T2 | "),
+            left_on="project_id",
+            right_index=True,
+            how="left"
+        )
+        .reset_index(drop=True)
+    )
+
+    # ---- durasi (hari) ----
+    def days(a, b):
+        if a not in df.columns or b not in df.columns:
+            return pd.Series(np.nan, index=df.index)
+        return (df[b] - df[a]).dt.total_seconds() / 86400
+
+    POL_ARR = "T2 | POL | Actual Arrive POL | Start"
+    POL_LS = "T2 | POL | Loading Start | Start"
+    POL_LC = "T2 | POL | Loading Complete | Start"
+    POL_FAW = "T2 | POL | FAW Sailing To POD | Start"
+    POD_ARR = "T2 | POD | Actual Arrive POD | Start"
+    POD_DS = "T2 | POD | Discharge Start | Start"
+    POD_DC = "T2 | POD | Discharge Complete | Start"
+    POD_FAW = "T2 | POD | FAW Sailing To Finish | Start"
+    FIN_ARR = "T2 | Finish | Actual Arrive Finish | Start"
+
+    df["Voyage V.2 (hari)"] = days("T1 FAW Sailing To Finish", POD_FAW)
+    df["Jeda Finish T1 ke Arrive POL (hari)"] = days(
+        "T1 Actual Arrive Finish", POL_ARR
+    )
+    df["POL Loading (hari)"] = days(POL_LS, POL_LC)
+    df["POL Total Port (hari)"] = days(POL_ARR, POL_FAW)
+    df["Sailing POL ke POD (hari)"] = days(POL_FAW, POD_ARR)
+    df["POD Discharge (hari)"] = days(POD_DS, POD_DC)
+    df["POD Total Port (hari)"] = days(POD_ARR, POD_FAW)
+    df["Sailing POD ke Finish (hari)"] = days(POD_FAW, FIN_ARR)
+    df["Total Voyage Days"] = (
+        df["Sailing POL ke POD (hari)"]
+        + df["Sailing POD ke Finish (hari)"]
+    )
+
+    # ---- flag Data Check (durasi negatif) ----
+    labels = {
+        "Jeda Finish T1 ke Arrive POL (hari)": "Jeda T1-POL negatif",
+        "POL Loading (hari)": "POL Loading negatif",
+        "Sailing POL ke POD (hari)": "Sailing POL-POD negatif",
+        "Sailing POD ke Finish (hari)": "Sailing POD-Finish negatif",
+        "Total Voyage Days": "Total Voyage negatif"
+    }
+
+    chk = pd.DataFrame({
+        lab: np.where(df[c] < 0, lab, "")
+        for c, lab in labels.items()
+    })
+    flag = chk.apply(lambda r: "; ".join(x for x in r if x), axis=1)
+    df["Data Check"] = flag.where(flag != "", None)
+
+    print(
+        f"Turnaround V2: {df.shape[0]:,} project x {df.shape[1]:,} kolom | "
+        f"tanpa T1: {df['T1 Project Code'].isna().sum():,} | "
+        f"flag Data Check: {df['Data Check'].notna().sum():,}"
+    )
+    print(
+        f"ETA POL: {df['T2 ETA POL'].notna().sum():,} | "
+        f"ETA POD: {df['T2 ETA POD'].notna().sum():,} | "
+        f"Cargo Loading: {df['T2 Total Cargo Loading'].notna().sum():,} | "
+        f"Cargo Discharge: {df['T2 Total Cargo Discharge'].notna().sum():,} | "
+        f"Revenue: {df['T2 Revenue'].notna().sum():,}"
+    )
+
+    return df
+
+
+def v2_snake(name):
+    s = name.replace("T2 | ", "t2_").replace("T1 ", "t1_")
+    s = s.replace("|", " ").replace("/", " ").replace(".", "_")
+    s = re.sub(r"[^0-9a-zA-Z_ ]+", " ", s)
+    s = re.sub(r"\s+", "_", s.strip()).lower()
+    return re.sub(r"_+", "_", s)
+
+
+def v2_to_num(s):
+    out = pd.to_numeric(s, errors="coerce")
+    lost = int((s.notna() & out.isna()).sum())
+    if lost:
+        print(f"  ! {lost} nilai non-angka di '{s.name}' jadi null")
+    return out
+
+
+def v2_to_dt(s):
+    # pandas >= 2 menebak format dari elemen pertama; "mixed" mencegah
+    # elemen berformat lain diam-diam jadi NaT
+    if int(pd.__version__.split(".")[0]) >= 2:
+        out = pd.to_datetime(s, errors="coerce", utc=True, format="mixed")
+    else:
+        out = pd.to_datetime(s, errors="coerce", utc=True)
+    return out.dt.tz_localize(None)
+
+
+def v2_finalize(df_turn):
+
+    df = df_turn.copy()
+
+    new_cols = [v2_snake(c) for c in df.columns]
+    dup = pd.Series(new_cols)[pd.Series(new_cols).duplicated(keep=False)]
+    if len(dup):
+        raise ValueError(f"Nama kolom kembar: {dup.tolist()}")
+    if max(len(c.encode()) for c in new_cols) > 63:
+        raise ValueError("Ada nama kolom > 63 karakter")
+    df.columns = new_cols
+
+    for c in ["started_at", "expected_at", "closed_at", "sidate"]:
+        if c in df.columns:
+            df[c] = v2_to_dt(df[c])
+
+    for c in [c for c in df.columns if c.endswith("_eta")]:
+        df[c] = v2_to_dt(df[c])
+
+    num = [
+        "price", "demmurage", "bbm", "bargeel_feet", "tugboatel_feet",
+        "ondemmurage", "downtimeamount", "polstartdemmurage",
+        "polenddemmurage", "podstartdemmurage", "podenddemmurage"
+    ]
+
+    for c in df.columns:
+        if c in num or c.endswith(("_speed", "_rpm", "_remainingdistance")):
+            df[c] = v2_to_num(df[c])
+
+    for c in [c for c in df.columns if c.endswith("_count")]:
+        df[c] = v2_to_num(df[c]).astype("Int64")
+
+    if df[V2_KEY].isna().any():
+        raise ValueError("Ada project_code kosong")
+
+    dups = df[df[V2_KEY].duplicated(keep=False)][V2_KEY].unique().tolist()
+    if dups:
+        raise ValueError(f"project_code duplikat: {dups[:10]}")
+
+    out = df.copy()
+    for c in out.columns:
+        if pd.api.types.is_datetime64_any_dtype(out[c]):
+            out[c] = out[c].dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+    out = out.astype(object).where(out.notna(), None)
+
+    return df, out.to_dict(orient="records")
+
+
+def v2_sql_type(s):
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return "timestamp"
+    if pd.api.types.is_bool_dtype(s):
+        return "boolean"
+    if pd.api.types.is_integer_dtype(s):
+        return "bigint"
+    if pd.api.types.is_float_dtype(s):
+        return "double precision"
+    return "text"
+
+
+def v2_req(method, url, retries=3, **kw):
+
+    extra = kw.pop("headers", {})
+    err = ""
+
+    for i in range(retries):
+        try:
+            r = requests.request(
+                method,
+                url,
+                headers={**V2_HDR, **extra},
+                timeout=120,
+                **kw
+            )
+            if r.status_code < 300:
+                return r
+            if r.status_code < 500 and r.status_code != 429:
+                raise RuntimeError(f"{r.status_code}: {r.text[:500]}")
+            err = f"{r.status_code}: {r.text[:200]}"
+        except requests.RequestException as e:
+            err = str(e)
+
+        time.sleep(2 ** i)
+
+    raise RuntimeError(f"Gagal setelah {retries}x: {err}")
+
+
+def v2_existing_keys():
+
+    keys, offset, page = [], 0, 1000
+
+    while True:
+        rows = v2_req(
+            "GET",
+            V2_BASE,
+            params={
+                "select": V2_KEY,
+                "order": V2_KEY,
+                "limit": page,
+                "offset": offset
+            }
+        ).json()
+
+        keys += [x[V2_KEY] for x in rows]
+
+        if len(rows) < page:
+            return keys
+
+        offset += page
+
+
+def v2_check_schema(df):
+    """Cocokkan kolom df dengan tabel. Kalau beda: cetak SQL lalu berhenti."""
+
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL.rstrip('/')}/rest/v1/",
+            timeout=60,
+            headers={**V2_HDR, "Accept": "application/openapi+json"}
+        )
+        r.raise_for_status()
+        props = (
+            r.json()
+            .get("definitions", {})
+            .get(V2_TABLE, {})
+            .get("properties")
+        )
+    except Exception as e:
+        print("  ! Cek skema dilewati:", e)
+        return
+
+    cols = list(df.columns)
+
+    if not props:
+        lines = [
+            f'  "{c}" '
+            f'{"text primary key" if c == V2_KEY else v2_sql_type(df[c])}'
+            for c in cols
+        ]
+        lines.append('  "synced_at" timestamptz')
+
+        print(f"\nTabel {V2_TABLE} belum ada. Jalankan di SQL Editor:\n")
+        print(f"create table {V2_TABLE} (\n" + ",\n".join(lines) + "\n);")
+        print("notify pgrst, 'reload schema';")
+        raise RuntimeError("Tabel V2 belum dibuat")
+
+    missing = [c for c in cols if c not in props]
+
+    if missing:
+        print(f"\n{len(missing)} kolom belum ada di tabel. "
+              f"Jalankan di SQL Editor:\n")
+        for c in missing:
+            print(
+                f'alter table {V2_TABLE} add column if not exists '
+                f'"{c}" {v2_sql_type(df[c])};'
+            )
+        print("notify pgrst, 'reload schema';")
+        raise RuntimeError("Kolom tabel V2 belum lengkap")
+
+    print("Skema V2 cocok.")
+
+
+def v2_sync(df, rows):
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = [{**r, "synced_at": now} for r in rows]
+    new_keys = [r[V2_KEY] for r in rows]
+
+    v2_check_schema(df)
+
+    old_keys = v2_existing_keys()
+    print(f"Supabase V2: {len(old_keys):,} baris | baru: {len(rows):,}")
+
+    if not rows:
+        raise RuntimeError("Payload V2 kosong")
+
+    if old_keys and len(rows) < V2_MIN_RATIO * len(old_keys):
+        raise RuntimeError(
+            f"Jumlah baris V2 turun drastis "
+            f"({len(rows)} < {V2_MIN_RATIO:.0%} x {len(old_keys)}). "
+            f"Cek MERPIS_API_URL (harus year=all)."
+        )
+
+    orphans = sorted(set(old_keys) - set(new_keys))
+    print(f"V2 upsert: {len(rows):,} | dihapus: {len(orphans):,} {orphans[:10]}")
+
+    if V2_DRY_RUN:
+        print("V2_DRY_RUN aktif -> tidak ada yang ditulis.")
+        return
+
+    def dumps(o):
+        return json.dumps(
+            o,
+            default=lambda x: x.item() if hasattr(x, "item") else str(x)
+        )
+
+    for i in range(0, len(rows), V2_BATCH):
+        v2_req(
+            "POST",
+            V2_BASE,
+            params={"on_conflict": V2_KEY},
+            headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+            data=dumps(rows[i:i + V2_BATCH])
+        )
+        print(f"  V2 upsert {min(i + V2_BATCH, len(rows)):,}/{len(rows):,}")
+
+    for i in range(0, len(orphans), 100):
+        in_list = ",".join(
+            '"' + c.replace('"', "") + '"'
+            for c in orphans[i:i + 100]
+        )
+        v2_req(
+            "DELETE",
+            V2_BASE,
+            params={V2_KEY: f"in.({in_list})"},
+            headers={"Prefer": "return=minimal"}
+        )
+
+    print(f"  V2 hapus baris yatim: {len(orphans):,}")
+
+    final = v2_existing_keys()
+    print(f"V2 selesai. Baris di tabel: {len(final):,} (target {len(rows):,})")
+
+    if set(final) != set(new_keys):
+        raise RuntimeError("Isi tabel V2 tidak sama dengan payload")
+
+
+def run_turnaround_v2(raw_data):
+
+    print("===================================")
+    print(f"TURNAROUND V2 -> {V2_TABLE}")
+    print("===================================")
+
+    data = raw_data["data"]
+
+    if not isinstance(data, dict) or not data.get("monitoring"):
+        raise ValueError("Struktur API tidak sesuai: data.monitoring kosong.")
+
+    records = data["monitoring"]
+
+    n_proj = len({r["project"] for r in records})
+    print(f"V2 sumber: {len(records):,} event, {n_proj:,} project")
+
+    df_turn = v2_build(records)
+    df, rows = v2_finalize(df_turn)
+    v2_sync(df, rows)
+
+    return df_turn
 
 # =====================================================
 # MAIN PIPELINE
@@ -1214,6 +1773,9 @@ def main():
     # 6. TABEL TURNAROUND (Trip 1 + Trip 2)
     df_turnaround = build_turnaround(df_upload)
     upload_turnaround(df_turnaround)
+
+    # 7. TURNAROUND V2 (1 baris per project, semua aktivitas)
+    run_turnaround_v2(raw_data)
 
     print("===================================")
     print("PIPELINE BERHASIL")
