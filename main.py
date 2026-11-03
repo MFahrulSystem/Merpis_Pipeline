@@ -27,6 +27,14 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 TABLE_NAME = "monitoring_project"
 
+# Override Revenue manual (dipakai clean_for_supabase untuk tabel lama)
+MANUAL_REVENUE = {
+    "BG.MP31-2026-014": 180000000,
+    "BG.MP31-2026-016": 300000000,
+    "BG.MP31-2026-017": 180000000,
+    "BG.MP31-2026-018": 240000000
+}
+
 
 # =====================================================
 # VALIDASI ENV
@@ -702,7 +710,7 @@ def clean_for_supabase(df_matrix_final):
             df_upload["Total Cargo Loading"]
         )
 
-        # Override manual: dict MANUAL_REVENUE (didefinisikan di atas v2_build)
+        # Override manual: dict MANUAL_REVENUE (didefinisikan di bagian konfigurasi atas)
         project_code = df_upload["Project Code"].astype(str).str.strip()
 
         for code, value in MANUAL_REVENUE.items():
@@ -1172,10 +1180,11 @@ def upload_turnaround(df_turnaround):
 
     print("Upload turnaround selesai.")
 
+
 # ===============================================================
 # TURNAROUND V2
-# 1 baris per project: info project + T1 (2 kolom) + T2 (semua aktivitas)
-# + ETA POL, ETA POD, Total Cargo Loading/Discharge, Revenue
+# 1 baris per project: info project + T1 (3 kolom) + T2 (aktivitas pilihan)
+# Layout kolom akhir diatur oleh V2_KOLOM + V2_RENAME (lihat di bawah)
 # Tabel: monitoring_turnaround_v2 -> upsert + hapus baris yatim
 # (tabel monitoring_turnaround lama tidak disentuh)
 # ===============================================================
@@ -1209,31 +1218,6 @@ V2_HDR = {
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json"
 }
-
-# Override Revenue manual (sumber tunggal: dipakai clean_for_supabase & V2)
-MANUAL_REVENUE = {
-    "BG.MP31-2026-014": 180000000,
-    "BG.MP31-2026-016": 300000000,
-    "BG.MP31-2026-017": 180000000,
-    "BG.MP31-2026-018": 240000000
-}
-
-
-def v2_clean_num(s):
-    """Sama seperti cleansing numerik lama: buang semua selain angka dan titik."""
-
-    def conv(x):
-        if x is None or x is pd.NA:
-            return np.nan
-        if isinstance(x, float) and np.isnan(x):
-            return np.nan
-        t = re.sub(r"[^0-9.]", "", str(x))
-        try:
-            return float(t)
-        except ValueError:
-            return np.nan
-
-    return s.map(conv).astype("float64")
 
 
 def v2_build(records):
@@ -1299,6 +1283,20 @@ def v2_build(records):
 
     wide = pd.concat(parts, axis=1)
 
+    # ---- rata-rata speed & rpm dari semua event Sailing ----
+    for act in ("POL | Sailing To POD", "POD | Sailing To Finish"):
+        sub = ev[ev["act"] == act]
+        avg = (
+            sub.assign(
+                speed=pd.to_numeric(sub["speed"], errors="coerce"),
+                rpm=pd.to_numeric(sub["rpm"], errors="coerce")
+            )
+            .groupby("project")[["speed", "rpm"]]
+            .mean()
+        )
+        wide[f"{act} | speed_avg"] = avg["speed"].reindex(wide.index)
+        wide[f"{act} | rpm_avg"] = avg["rpm"].reindex(wide.index)
+
     # ---- info project ----
     cols = [c for c in V2_PROJ_COLS if c in df_proj.columns]
     info = (
@@ -1332,52 +1330,6 @@ def v2_build(records):
             else pd.NaT
         )
 
-    # ---- ETA, Total Cargo, Revenue (rumus sama dengan tabel lama) ----
-    act_no = pd.to_numeric(df_ev["activities"], errors="coerce")
-
-    # ETA POD = ETA paling awal dari aktivitas 10 (FAW Sailing To POD)
-    e_pod = df_ev[act_no == 10][["project", "eta"]].copy()
-    e_pod["eta"] = v2_to_dt(e_pod["eta"])
-    e_pod = (
-        e_pod.sort_values(["project", "eta"])
-        .drop_duplicates("project", keep="first")
-        .set_index("project")["eta"]
-    )
-
-    # ETA POL = ETA paling awal dari aktivitas 38 (FAW Sailing To Finish)
-    # milik TRIP SEBELUMNYA (kapal yang sama)
-    e_fin = df_ev[act_no == 38][["project", "eta"]].copy()
-    e_fin["eta"] = v2_to_dt(e_fin["eta"])
-    e_fin = (
-        e_fin.sort_values(["project", "eta"])
-        .drop_duplicates("project", keep="first")
-        .set_index("project")["eta"]
-    )
-
-    # Total Cargo = activitydetail pertama dari Loading Complete (5)
-    # dan Discharge Complete (35)
-    def first_detail(a):
-        d = (
-            df_ev[act_no == a][["project", "activitydetail"]]
-            .drop_duplicates("project", keep="first")
-            .set_index("project")["activitydetail"]
-        )
-        return info["project_id"].map(d)
-
-    info["T2 ETA POL"] = info["_prev_id"].map(e_fin)
-    info["T2 ETA POD"] = info["project_id"].map(e_pod)
-    info["T2 Total Cargo Loading"] = v2_clean_num(first_detail(5))
-    info["T2 Total Cargo Discharge"] = v2_clean_num(first_detail(35))
-
-    # Revenue = Price/MT x Total Cargo Loading, lalu override manual
-    info["T2 Revenue"] = (
-        v2_clean_num(info["price"]) * info["T2 Total Cargo Loading"]
-    )
-
-    kode_up = info["Project Code"].astype(str).str.strip().str.upper()
-    for kode, nilai in MANUAL_REVENUE.items():
-        info.loc[kode_up == kode, "T2 Revenue"] = nilai
-
     df = (
         info.drop(columns=["_prefix", "_year", "_trip", "_prev_id"])
         .merge(
@@ -1389,7 +1341,7 @@ def v2_build(records):
         .reset_index(drop=True)
     )
 
-    # ---- durasi (hari) ----
+    # ---- durasi (hari): hanya untuk flag Data Check, tidak disimpan ----
     def days(a, b):
         if a not in df.columns or b not in df.columns:
             return pd.Series(np.nan, index=df.index)
@@ -1441,13 +1393,6 @@ def v2_build(records):
         f"tanpa T1: {df['T1 Project Code'].isna().sum():,} | "
         f"flag Data Check: {df['Data Check'].notna().sum():,}"
     )
-    print(
-        f"ETA POL: {df['T2 ETA POL'].notna().sum():,} | "
-        f"ETA POD: {df['T2 ETA POD'].notna().sum():,} | "
-        f"Cargo Loading: {df['T2 Total Cargo Loading'].notna().sum():,} | "
-        f"Cargo Discharge: {df['T2 Total Cargo Discharge'].notna().sum():,} | "
-        f"Revenue: {df['T2 Revenue'].notna().sum():,}"
-    )
 
     return df
 
@@ -1476,6 +1421,200 @@ def v2_to_dt(s):
     else:
         out = pd.to_datetime(s, errors="coerce", utc=True)
     return out.dt.tz_localize(None)
+
+
+# ---------------------------------------------------------------
+# LAYOUT KOLOM AKHIR TABEL V2 (urutan = urutan kolom di tabel)
+# V2_KOLOM  : nama kolom sumber (hasil v2_snake) yang dipertahankan
+# V2_RENAME : nama sumber -> nama akhir di Supabase
+# Kolom yang tidak ada di V2_KOLOM otomatis dibuang.
+# synced_at ditambahkan otomatis di kolom paling akhir.
+# ---------------------------------------------------------------
+
+V2_KOLOM = [
+    "project_id",
+    "project_code",
+    "remarks",
+    "owner",
+    "started_at",
+    "expected_at",
+    "closed_at",
+    "closed_by",
+    "tugboatel_name",
+    "bargeel_name",
+    "bargeel_feet",
+    "tugboatel_feet",
+    "customerel_shortname",
+    "customerel_fullname",
+    "cargoel_name",
+    "polel_name",
+    "polel_shortname",
+    "podel_name",
+    "podel_shortname",
+    "podpreviousel_name",
+    "spal",
+    "si",
+    "sidate",
+    "price",
+    "prorata",
+    "bbm",
+    "demmurage",
+    "ondemmurage",
+    "sapb1",
+    "projectremarks",
+    "polagen",
+    "podagen",
+    "polstartdemmurage",
+    "polenddemmurage",
+    "podstartdemmurage",
+    "podenddemmurage",
+    "downtimeamount",
+    "t1_project_code",
+    "t1_faw_sailing_to_finish",
+    "t1_actual_arrive_finish",
+    "t2_pol_actual_arrive_pol_start",
+    "t2_pol_actual_arrive_pol_activitydetail",
+    "t2_pol_berthing_start",
+    "t2_pol_berthing_last",
+    "t2_pol_loading_start_start",
+    "t2_pol_loading_progress_start",
+    "t2_pol_loading_progress_last",
+    "t2_pol_loading_complete_start",
+    "t2_pol_loading_complete_activitydetail",
+    "t2_pol_loading_complete_cargoremarks",
+    "t2_pol_cash_off_jetty_start",
+    "t2_pol_wait_document_start",
+    "t2_pol_wait_document_last",
+    "t2_pol_skab_lhv_start",
+    "t2_pol_skab_lhv_activitydetail",
+    "t2_pol_document_on_board_start",
+    "t2_pol_document_on_board_activitydetail",
+    "t2_pol_faw_sailing_to_pod_start",
+    "t2_pol_faw_sailing_to_pod_eta",
+    "t2_pol_faw_sailing_to_pod_remainingdistance",
+    "t2_pol_sailing_to_pod_start",
+    "t2_pol_sailing_to_pod_last",
+    "t2_pol_sailing_to_pod_speed_avg",
+    "t2_pol_sailing_to_pod_rpm_avg",
+    "t2_pol_cleaning_start_start",
+    "t2_pol_cleaning_start_activitydetail",
+    "t2_pol_cleaning_target_start",
+    "t2_pol_cleaning_progress_start",
+    "t2_pol_cleaning_progress_last",
+    "t2_pol_cleaning_complete_start",
+    "t2_pol_standby_start",
+    "t2_pol_standby_last",
+    "t2_pol_bunkering_start",
+    "t2_pol_bunkering_last",
+    "t2_pol_bunkering_activitydetail",
+    "t2_pol_rain_start",
+    "t2_pol_rain_stop_start",
+    "t2_pol_maintenance_start",
+    "t2_pol_maintenance_activitydetail",
+    "t2_pol_maintenance_done_start",
+    "t2_pol_berlindung_start",
+    "t2_pol_berlindung_last",
+    "t2_pol_connect_rampdoor_start",
+    "t2_pod_actual_arrive_pod_start",
+    "t2_pod_berthing_start",
+    "t2_pod_berthing_last",
+    "t2_pod_discharge_start_start",
+    "t2_pod_discharge_progress_start",
+    "t2_pod_discharge_progress_last",
+    "t2_pod_discharge_complete_start",
+    "t2_pod_discharge_complete_activitydetail",
+    "t2_pod_discharge_complete_cargoremarks",
+    "t2_pod_cash_off_jetty_start",
+    "t2_pod_document_on_board_start",
+    "t2_pod_faw_sailing_to_finish_start",
+    "t2_pod_faw_sailing_to_finish_activitydetail",
+    "t2_pod_faw_sailing_to_finish_eta",
+    "t2_pod_faw_sailing_to_finish_remainingdistance",
+    "t2_pod_sailing_to_finish_start",
+    "t2_pod_sailing_to_finish_last",
+    "t2_pod_sailing_to_finish_speed_avg",
+    "t2_pod_sailing_to_finish_rpm_avg",
+    "t2_pod_cleaning_start_start",
+    "t2_pod_cleaning_complete_start",
+    "t2_pod_standby_start",
+    "t2_pod_standby_last",
+    "t2_pod_waiting_for_si_start",
+    "t2_pod_bunkering_start",
+    "t2_pod_bunkering_last",
+    "t2_pod_rain_start",
+    "t2_pod_rain_stop_start",
+    "t2_pod_maintenance_start",
+    "t2_pod_maintenance_done_start",
+    "t2_pod_connect_rampdoor_start",
+    "t2_pod_wait_document_start",
+    "t2_pod_wait_document_last",
+    "t2_pod_waiting_surveyor_ds_start",
+    "t2_finish_actual_arrive_finish_start",
+    "data_check"
+]
+
+V2_RENAME = {
+    "t2_pol_actual_arrive_pol_start": "t2_pol_actual_arrive_pol",
+    "t2_pol_loading_start_start": "t2_pol_loading_start",
+    "t2_pol_loading_complete_start": "t2_pol_loading_complete",
+    "t2_pol_cash_off_jetty_start": "t2_pol_cash_off_jetty",
+    "t2_pol_skab_lhv_start": "t2_pol_skab_lhv",
+    "t2_pol_document_on_board_start": "t2_pol_document_on_board",
+    "t2_pol_faw_sailing_to_pod_start": "t2_pol_faw_sailing_to_pod",
+    "t2_pol_faw_sailing_to_pod_remainingdistance": "t2_pol_faw_sailing_to_pod_jarak",
+    "t2_pol_cleaning_start_start": "t2_pol_cleaning_start",
+    "t2_pol_cleaning_target_start": "t2_pol_cleaning_target",
+    "t2_pol_cleaning_complete_start": "t2_pol_cleaning_complete",
+    "t2_pol_rain_start": "t2_pol_rain",
+    "t2_pol_rain_stop_start": "t2_pol_rain_stop",
+    "t2_pol_maintenance_start": "t2_pol_maintenance",
+    "t2_pol_maintenance_done_start": "t2_pol_maintenance_done",
+    "t2_pol_connect_rampdoor_start": "t2_pol_connect_rampdoor",
+    "t2_pod_actual_arrive_pod_start": "t2_pod_actual_arrive_pod",
+    "t2_pod_discharge_start_start": "t2_pod_discharge_start",
+    "t2_pod_discharge_complete_start": "t2_pod_discharge_complete",
+    "t2_pod_cash_off_jetty_start": "t2_pod_cash_off_jetty",
+    "t2_pod_document_on_board_start": "t2_pod_document_on_board",
+    "t2_pod_faw_sailing_to_finish_start": "t2_pod_faw_sailing_to_finish",
+    "t2_pod_faw_sailing_to_finish_remainingdistance": "t2_pod_faw_sailing_to_finish_jarak",
+    "t2_pod_cleaning_start_start": "t2_pod_cleaning_start",
+    "t2_pod_cleaning_complete_start": "t2_pod_cleaning_complete",
+    "t2_pod_waiting_for_si_start": "t2_pod_waiting_for_si",
+    "t2_pod_rain_start": "t2_pod_rain",
+    "t2_pod_rain_stop_start": "t2_pod_rain_stop",
+    "t2_pod_maintenance_start": "t2_pod_maintenance",
+    "t2_pod_maintenance_done_start": "t2_pod_maintenance_done",
+    "t2_pod_connect_rampdoor_start": "t2_pod_connect_rampdoor",
+    "t2_pod_waiting_surveyor_ds_start": "t2_pod_waiting_surveyor_ds",
+    "t2_finish_actual_arrive_finish_start": "t2_finish_actual_arrive_finish"
+}
+
+
+def v2_apply_layout(df):
+    """Pilih, urutkan, dan ganti nama kolom sesuai V2_KOLOM / V2_RENAME."""
+
+    data, missing = {}, []
+
+    for s in V2_KOLOM:
+        d = V2_RENAME.get(s, s)
+        if s in df.columns:
+            data[d] = df[s]
+        else:
+            data[d] = pd.Series(np.nan, index=df.index)
+            missing.append(s)
+
+    if missing:
+        print(f"  ! {len(missing)} kolom sumber tidak ada di data "
+              f"(diisi kosong): {missing}")
+
+    out = pd.DataFrame(data, index=df.index)
+
+    if len(set(out.columns)) != len(out.columns):
+        raise ValueError("Nama kolom akhir V2 kembar.")
+    if max(len(c.encode()) for c in out.columns) > 63:
+        raise ValueError("Ada nama kolom akhir V2 > 63 karakter.")
+
+    return out
 
 
 def v2_finalize(df_turn):
@@ -1509,6 +1648,8 @@ def v2_finalize(df_turn):
 
     for c in [c for c in df.columns if c.endswith("_count")]:
         df[c] = v2_to_num(df[c]).astype("Int64")
+
+    df = v2_apply_layout(df)
 
     if df[V2_KEY].isna().any():
         raise ValueError("Ada project_code kosong")
@@ -1774,7 +1915,7 @@ def main():
     df_turnaround = build_turnaround(df_upload)
     upload_turnaround(df_turnaround)
 
-    # 7. TURNAROUND V2 (1 baris per project, semua aktivitas)
+    # 7. TURNAROUND V2 (1 baris per project, kolom sesuai V2_KOLOM)
     run_turnaround_v2(raw_data)
 
     print("===================================")
