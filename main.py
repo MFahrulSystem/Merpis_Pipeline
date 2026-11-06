@@ -307,12 +307,42 @@ def build_matrix_final(df_flat):
         how="left"
     )
 
-    df_project_profile["ETA POL"] = (
-        df_project_profile
-        .groupby("Grup_Kapal_Murni")[
-            "ETA_POL_Mentah"
-        ]
+    # ETA POL = ETA (FAW Sailing To Finish) milik TRIP SEBELUMNYA.
+    # Trip sebelumnya ditentukan dari nomor di Project Code
+    # (prefix, tahun, nomor trip), BUKAN dari tanggal mulai project.
+    # Kalau trip sebelumnya ada tapi ETA-nya kosong, hasilnya tetap kosong.
+    kode_eta = (
+        df_project_profile["projectel.code"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+
+    pola_eta = kode_eta.str.extract(r"^(.*)-(\d{4})-(\d+)$")
+
+    df_urut_eta = pd.DataFrame({
+        "project": df_project_profile["project"],
+        "prefix": pola_eta[0],
+        "tahun": pd.to_numeric(pola_eta[1], errors="coerce"),
+        "trip": pd.to_numeric(pola_eta[2], errors="coerce"),
+        "eta_mentah": df_project_profile["ETA_POL_Mentah"]
+    }).dropna(subset=["prefix", "tahun", "trip"])
+
+    df_urut_eta = df_urut_eta.sort_values(
+        ["prefix", "tahun", "trip"]
+    )
+
+    df_urut_eta["ETA POL"] = (
+        df_urut_eta
+        .groupby("prefix")["eta_mentah"]
         .shift(1)
+    )
+
+    df_project_profile = pd.merge(
+        df_project_profile,
+        df_urut_eta[["project", "ETA POL"]],
+        on="project",
+        how="left"
     )
 
     # =====================================================
