@@ -328,6 +328,26 @@ def build_matrix_final(df_flat):
         "eta_mentah": df_project_profile["ETA_POL_Mentah"]
     }).dropna(subset=["prefix", "tahun", "trip"])
 
+    # ETA hanya dianggap ada kalau tanggal FAW Sailing To Finish trip itu
+    # juga ada (valid, tahun > 1970). Kalau tanggal FAW kosong, ETA-nya
+    # dikosongkan juga (kapal baru / baru selesai docking).
+    if "FAW Sailing To Finish" in df_activities_pivoted.columns:
+
+        faw_per_project = pd.to_datetime(
+            df_activities_pivoted
+            .set_index("project")["FAW Sailing To Finish"],
+            errors="coerce"
+        )
+
+        faw_valid = df_urut_eta["project"].map(faw_per_project)
+        faw_valid = faw_valid.notna() & (faw_valid.dt.year > 1970)
+
+    else:
+
+        faw_valid = pd.Series(False, index=df_urut_eta.index)
+
+    df_urut_eta["eta_mentah"] = df_urut_eta["eta_mentah"].where(faw_valid)
+
     df_urut_eta = df_urut_eta.sort_values(
         ["prefix", "tahun", "trip"]
     )
