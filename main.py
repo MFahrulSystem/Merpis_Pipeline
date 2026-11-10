@@ -352,11 +352,30 @@ def build_matrix_final(df_flat):
         ["prefix", "tahun", "trip"]
     )
 
-    df_urut_eta["ETA POL"] = (
-        df_urut_eta
-        .groupby("prefix")["eta_mentah"]
-        .shift(1)
+    # Trip sebelumnya harus BERURUTAN: nomor trip - 1 di tahun yang sama.
+    # Kalau nomor trip sebelumnya tidak ada di data (project tanpa event
+    # aktivitas, kapal baru, atau baru selesai docking), ETA POL dikosongkan,
+    # tidak melompat ke trip yang lebih lama.
+    # Trip pertama di tahun baru mengikuti trip terakhir tahun lalu.
+    grup_eta = df_urut_eta.groupby("prefix")
+
+    eta_sebelumnya = grup_eta["eta_mentah"].shift(1)
+    tahun_sebelumnya = grup_eta["tahun"].shift(1)
+    trip_sebelumnya = grup_eta["trip"].shift(1)
+
+    berurutan = (
+        (
+            (df_urut_eta["tahun"] == tahun_sebelumnya)
+            & (df_urut_eta["trip"] == trip_sebelumnya + 1)
+        )
+        |
+        (
+            (df_urut_eta["tahun"] == tahun_sebelumnya + 1)
+            & (df_urut_eta["trip"] == 1)
+        )
     )
+
+    df_urut_eta["ETA POL"] = eta_sebelumnya.where(berurutan)
 
     df_project_profile = pd.merge(
         df_project_profile,
