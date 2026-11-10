@@ -37,6 +37,110 @@ MANUAL_REVENUE = {
 
 
 # =====================================================
+# RELASI TRIP SEBELUMNYA (SATU ATURAN UNTUK 3 TABEL)
+# Dipakai oleh: ETA POL (monitoring_project / monitoring_turnaround),
+#               T1 di monitoring_turnaround dan monitoring_turnaround_v2
+#
+# Sebuah project hanya dikaitkan dengan project sebelumnya kalau:
+#   1. project sebelumnya BERURUTAN: nomor trip - 1 di tahun yang sama
+#      (trip 1 mengikuti trip terakhir tahun lalu), dan
+#   2. project sebelumnya PUNYA ETA (FAW Sailing To Finish).
+# Kalau tidak: ETA POL kosong dan T1 kosong (tidak dikaitkan).
+# =====================================================
+
+POLA_KODE_TRIP = r"^(.*)-(\d{4})-(\d+)$"
+
+
+def hubungkan_trip_sebelumnya(df_in):
+    """
+    df_in : kolom id, kode, eta
+            (eta = ETA FAW Sailing To Finish milik project itu sendiri)
+    hasil : kolom id, kode, prev_id, prev_kode, prev_eta
+            (prev_* kosong kalau project tidak dikaitkan)
+    """
+
+    d = df_in[["id", "kode", "eta"]].copy()
+
+    d["kode"] = (
+        d["kode"]
+        .astype("string")
+        .str.strip()
+        .str.upper()
+    )
+
+    pola = d["kode"].str.extract(POLA_KODE_TRIP)
+
+    d["prefix"] = pola[0]
+    d["tahun"] = pd.to_numeric(pola[1], errors="coerce")
+    d["trip"] = pd.to_numeric(pola[2], errors="coerce")
+
+    eta = pd.to_datetime(d["eta"], errors="coerce")
+    d["eta"] = eta.where(eta.dt.year > 1970)
+
+    d = (
+        d.dropna(subset=["prefix", "tahun", "trip"])
+        .sort_values(["prefix", "tahun", "trip"])
+    )
+
+    g = d.groupby("prefix")
+
+    prev_tahun = g["tahun"].shift(1)
+    prev_trip = g["trip"].shift(1)
+    prev_eta = g["eta"].shift(1)
+
+    berurutan = (
+        (
+            (d["tahun"] == prev_tahun)
+            & (d["trip"] == prev_trip + 1)
+        )
+        |
+        (
+            (d["tahun"] == prev_tahun + 1)
+            & (d["trip"] == 1)
+        )
+    )
+
+    terhubung = berurutan & prev_eta.notna()
+
+    return pd.DataFrame({
+        "id": d["id"],
+        "kode": d["kode"],
+        "prev_id": g["id"].shift(1).where(terhubung),
+        "prev_kode": g["kode"].shift(1).where(terhubung),
+        "prev_eta": prev_eta.where(terhubung)
+    })
+
+
+def buat_peta_relasi(df_flat):
+    """Dict {Project Code: Project Code sebelumnya} untuk project yang terhubung."""
+
+    d = df_flat[["project", "projectel.code", "activities", "eta"]].copy()
+    d["project"] = d["project"].astype("string")
+    d["eta"] = pd.to_datetime(d["eta"], errors="coerce")
+
+    eta_fin = (
+        d[d["activities"].astype(str) == "38"][["project", "eta"]]
+        .sort_values(["project", "eta"])
+        .drop_duplicates("project", keep="first")
+        .set_index("project")["eta"]
+    )
+
+    prof = d[["project", "projectel.code"]].drop_duplicates("project")
+
+    relasi = hubungkan_trip_sebelumnya(
+        pd.DataFrame({
+            "id": prof["project"],
+            "kode": prof["projectel.code"],
+            "eta": prof["project"].map(eta_fin)
+        })
+    )
+
+    relasi = relasi.dropna(subset=["prev_kode"])
+
+    return dict(zip(relasi["kode"], relasi["prev_kode"]))
+
+
+# =====================================================
 # VALIDASI ENV
 # =====================================================
 
@@ -308,78 +412,21 @@ def build_matrix_final(df_flat):
     )
 
     # ETA POL = ETA (FAW Sailing To Finish) milik TRIP SEBELUMNYA.
-    # Trip sebelumnya ditentukan dari nomor di Project Code
-    # (prefix, tahun, nomor trip), BUKAN dari tanggal mulai project.
-    # Kalau trip sebelumnya ada tapi ETA-nya kosong, hasilnya tetap kosong.
-    kode_eta = (
-        df_project_profile["projectel.code"]
-        .astype("string")
-        .str.strip()
-        .str.upper()
+    # Aturan relasi: lihat hubungkan_trip_sebelumnya()
+    # (trip sebelumnya harus berurutan dan punya ETA, kalau tidak: kosong).
+    relasi_eta = hubungkan_trip_sebelumnya(
+        pd.DataFrame({
+            "id": df_project_profile["project"],
+            "kode": df_project_profile["projectel.code"],
+            "eta": df_project_profile["ETA_POL_Mentah"]
+        })
     )
-
-    pola_eta = kode_eta.str.extract(r"^(.*)-(\d{4})-(\d+)$")
-
-    df_urut_eta = pd.DataFrame({
-        "project": df_project_profile["project"],
-        "prefix": pola_eta[0],
-        "tahun": pd.to_numeric(pola_eta[1], errors="coerce"),
-        "trip": pd.to_numeric(pola_eta[2], errors="coerce"),
-        "eta_mentah": df_project_profile["ETA_POL_Mentah"]
-    }).dropna(subset=["prefix", "tahun", "trip"])
-
-    # ETA hanya dianggap ada kalau tanggal FAW Sailing To Finish trip itu
-    # juga ada (valid, tahun > 1970). Kalau tanggal FAW kosong, ETA-nya
-    # dikosongkan juga (kapal baru / baru selesai docking).
-    if "FAW Sailing To Finish" in df_activities_pivoted.columns:
-
-        faw_per_project = pd.to_datetime(
-            df_activities_pivoted
-            .set_index("project")["FAW Sailing To Finish"],
-            errors="coerce"
-        )
-
-        faw_valid = df_urut_eta["project"].map(faw_per_project)
-        faw_valid = faw_valid.notna() & (faw_valid.dt.year > 1970)
-
-    else:
-
-        faw_valid = pd.Series(False, index=df_urut_eta.index)
-
-    df_urut_eta["eta_mentah"] = df_urut_eta["eta_mentah"].where(faw_valid)
-
-    df_urut_eta = df_urut_eta.sort_values(
-        ["prefix", "tahun", "trip"]
-    )
-
-    # Trip sebelumnya harus BERURUTAN: nomor trip - 1 di tahun yang sama.
-    # Kalau nomor trip sebelumnya tidak ada di data (project tanpa event
-    # aktivitas, kapal baru, atau baru selesai docking), ETA POL dikosongkan,
-    # tidak melompat ke trip yang lebih lama.
-    # Trip pertama di tahun baru mengikuti trip terakhir tahun lalu.
-    grup_eta = df_urut_eta.groupby("prefix")
-
-    eta_sebelumnya = grup_eta["eta_mentah"].shift(1)
-    tahun_sebelumnya = grup_eta["tahun"].shift(1)
-    trip_sebelumnya = grup_eta["trip"].shift(1)
-
-    berurutan = (
-        (
-            (df_urut_eta["tahun"] == tahun_sebelumnya)
-            & (df_urut_eta["trip"] == trip_sebelumnya + 1)
-        )
-        |
-        (
-            (df_urut_eta["tahun"] == tahun_sebelumnya + 1)
-            & (df_urut_eta["trip"] == 1)
-        )
-    )
-
-    df_urut_eta["ETA POL"] = eta_sebelumnya.where(berurutan)
 
     df_project_profile = pd.merge(
         df_project_profile,
-        df_urut_eta[["project", "ETA POL"]],
+        relasi_eta[["id", "prev_eta"]].rename(
+            columns={"id": "project", "prev_eta": "ETA POL"}
+        ),
         on="project",
         how="left"
     )
@@ -1102,7 +1149,7 @@ KOLOM_T2 = [
 ]
 
 
-def build_turnaround(df_upload):
+def build_turnaround(df_upload, peta_relasi):
 
     print("Membentuk tabel turnaround (Trip 1 + Trip 2)...")
 
@@ -1111,26 +1158,15 @@ def build_turnaround(df_upload):
     # Buang baris tanpa Project Code (primary key tidak boleh kosong)
     df = df[df["Project Code"].notna()].copy()
 
-    # BG.AB01-2026-002 -> grup: BG.AB01-2026 | trip: 2
-    kode = (
+    # Kode normal (huruf besar, tanpa spasi) sebagai kunci relasi
+    df["_kode"] = (
         df["Project Code"]
         .astype("string")
         .str.strip()
         .str.upper()
     )
 
-    kode_split = kode.str.extract(r"^(.*)-(\d+)$")
-
-    # Kode yang tidak cocok pola dianggap trip 1 di grupnya sendiri
-    df["_grup"] = kode_split[0].fillna(kode)
-    df["_trip"] = pd.to_numeric(
-        kode_split[1],
-        errors="coerce"
-    ).fillna(1)
-
-    df = df.sort_values(
-        ["_grup", "_trip"]
-    ).reset_index(drop=True)
+    df = df.sort_values("_kode").reset_index(drop=True)
 
     # =====================================================
     # TOTAL VOYAGE DAYS (rumus turnaround)
@@ -1154,7 +1190,10 @@ def build_turnaround(df_upload):
 
     df["Total Voyage Days"] = leg_pod + leg_finish
 
-    grp = df.groupby("_grup")
+    # Trip 1 = project sebelumnya yang terhubung (berurutan dan punya ETA).
+    # Kalau tidak terhubung, semua kolom T1 kosong.
+    df["_prev"] = df["_kode"].map(peta_relasi)
+    base = df.set_index("_kode")
 
     out = pd.DataFrame(index=df.index)
 
@@ -1162,12 +1201,12 @@ def build_turnaround(df_upload):
     for c in KOLOM_IDENTITAS:
         out[c] = df[c] if c in df.columns else None
 
-    # Trip 1 = baris sebelumnya di grup yang sama
-    out["T1 Project Code"] = grp["Project Code"].shift(1)
+    # Trip 1
+    out["T1 Project Code"] = df["_prev"]
 
     for c in KOLOM_T1:
         out[f"T1 {c}"] = (
-            grp[c].shift(1)
+            df["_prev"].map(base[c])
             if c in df.columns
             else None
         )
@@ -1253,6 +1292,7 @@ def upload_turnaround(df_turnaround):
 # ===============================================================
 # TURNAROUND V2
 # 1 baris per project: info project + T1 (3 kolom) + T2 (aktivitas pilihan)
+# T1 = project sebelumnya yang terhubung (lihat hubungkan_trip_sebelumnya)
 # Layout kolom akhir diatur oleh V2_KOLOM + V2_RENAME (lihat di bawah)
 # Tabel: monitoring_turnaround_v2 -> upsert + hapus baris yatim
 # (tabel monitoring_turnaround lama tidak disentuh)
@@ -1374,18 +1414,31 @@ def v2_build(records):
         .copy()
     )
 
-    # ---- T1 = trip sebelumnya (lintas tahun), hanya 2 kolom ----
-    pat = info["Project Code"].str.extract(r"^(.*)-(\d{4})-(\d+)$")
-    info["_prefix"] = pat[0]
-    info["_year"] = pat[1].astype(float)
-    info["_trip"] = pat[2].astype(float)
+    # ---- T1 = trip sebelumnya: berurutan DAN punya ETA, kalau tidak kosong ----
+    eta_fin = (
+        df_ev[pd.to_numeric(df_ev["activities"], errors="coerce") == 38]
+        [["project", "eta"]]
+        .copy()
+    )
+    eta_fin["eta"] = v2_to_dt(eta_fin["eta"])
+    eta_fin = (
+        eta_fin.sort_values(["project", "eta"])
+        .drop_duplicates("project", keep="first")
+        .set_index("project")["eta"]
+    )
 
-    info = info.sort_values(
-        ["_prefix", "_year", "_trip"]
-    ).reset_index(drop=True)
+    relasi = hubungkan_trip_sebelumnya(
+        pd.DataFrame({
+            "id": info["project_id"],
+            "kode": info["Project Code"],
+            "eta": info["project_id"].map(eta_fin)
+        })
+    ).set_index("id")
 
-    info["T1 Project Code"] = info.groupby("_prefix")["Project Code"].shift(1)
-    info["_prev_id"] = info.groupby("_prefix")["project_id"].shift(1)
+    info["T1 Project Code"] = info["project_id"].map(relasi["prev_kode"])
+    info["_prev_id"] = info["project_id"].map(relasi["prev_id"])
+
+    info = info.sort_values("Project Code").reset_index(drop=True)
 
     t1_src = {
         "T1 FAW Sailing To Finish": "POD | FAW Sailing To Finish | Start",
@@ -1400,7 +1453,7 @@ def v2_build(records):
         )
 
     df = (
-        info.drop(columns=["_prefix", "_year", "_trip", "_prev_id"])
+        info.drop(columns=["_prev_id"])
         .merge(
             wide.add_prefix("T2 | "),
             left_on="project_id",
@@ -1981,7 +2034,8 @@ def main():
     )
 
     # 6. TABEL TURNAROUND (Trip 1 + Trip 2)
-    df_turnaround = build_turnaround(df_upload)
+    peta_relasi = buat_peta_relasi(df_flat)
+    df_turnaround = build_turnaround(df_upload, peta_relasi)
     upload_turnaround(df_turnaround)
 
     # 7. TURNAROUND V2 (1 baris per project, kolom sesuai V2_KOLOM)
