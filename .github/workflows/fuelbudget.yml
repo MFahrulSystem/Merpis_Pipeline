@@ -16,6 +16,6 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python Merpis_FuelConsumption/fuelbudget_pipeline.py
         env:
-          MERPIS_TOKEN: ${{ secrets.MERPIS_TOKEN }}
+          MERPIS_TOKEN: ${{ secrets.MERPIS_TOKEN_FUEL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
