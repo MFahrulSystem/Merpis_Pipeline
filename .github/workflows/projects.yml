@@ -1,0 +1,22 @@
+name: Projects Sync
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"   # tiap 3 jam (UTC)
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests pandas numpy supabase
+      - run: python Merpis_Projects/projects_pipeline.py
+        env:
+          MERPIS_TOKEN_PROJECTS: ${{ secrets.MERPIS_TOKEN_PROJECTS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
