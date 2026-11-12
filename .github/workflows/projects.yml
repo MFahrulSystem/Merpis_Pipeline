@@ -2,7 +2,7 @@ name: Projects Sync
 
 on:
   schedule:
-    - cron: "0 */3 * * *"   # tiap 3 jam (UTC)
+    - cron: "0 */3 * * *"   # tiap 6 jam (UTC)
   workflow_dispatch:
 
 jobs:
@@ -15,7 +15,17 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install requests pandas numpy supabase
-      - run: python Merpis_Projects/projects_pipeline.py
+
+      - name: Sync project types
+        run: python Merpis_Projects/projecttype_pipeline.py
+        env:
+          MERPIS_TOKEN_PROJECTS: ${{ secrets.MERPIS_TOKEN_PROJECTS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+      - name: Sync projects
+        if: always()
+        run: python Merpis_Projects/projects_pipeline.py
         env:
           MERPIS_TOKEN_PROJECTS: ${{ secrets.MERPIS_TOKEN_PROJECTS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
