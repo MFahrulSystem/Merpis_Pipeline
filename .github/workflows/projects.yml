@@ -2,7 +2,7 @@ name: Projects Sync
 
 on:
   schedule:
-    - cron: "0 */3 * * *"   # tiap 6 jam (UTC)
+    - cron: "0 */6 * * *"   # tiap 6 jam (UTC)
   workflow_dispatch:
 
 jobs:
@@ -16,7 +16,23 @@ jobs:
           python-version: "3.12"
       - run: pip install requests pandas numpy supabase
 
+      - name: Sync ports
+        run: python Merpis_Port/port_pipeline.py
+        env:
+          MERPIS_TOKEN_PROJECTS: ${{ secrets.MERPIS_TOKEN_PROJECTS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+      - name: Sync vessels
+        if: always()
+        run: python Merpis_Vessel/vessel_pipeline.py
+        env:
+          MERPIS_TOKEN_PROJECTS: ${{ secrets.MERPIS_TOKEN_PROJECTS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
       - name: Sync project types
+        if: always()
         run: python Merpis_Projects/projecttype_pipeline.py
         env:
           MERPIS_TOKEN_PROJECTS: ${{ secrets.MERPIS_TOKEN_PROJECTS }}
