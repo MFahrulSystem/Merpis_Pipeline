@@ -8,7 +8,7 @@ from supabase import create_client
 
 API_URL = "https://merpis.ptmerahputih.com/api/fuelbudget"
 TABLE_BUDGET = "fuelbudget"
-TABLE_DAILY = "fuelbudget_dailies"
+TABLE_DAILY = "fuelbunker"
 BATCH = 500
 READ_TIMEOUT = 300
 RETRIES = 3
@@ -31,7 +31,7 @@ B_TS = ["created_at", "updated_at"]
 B_TEXT = ["created_by", "otherstext", "budgetsyncel_status"]
 B_COLS = ["id"] + B_BIGINT + B_NUMERIC + B_TS + B_TEXT
 
-# ---------- Tabel 2: fuelbudget_dailies (dailiesel, 1 baris per catatan harian) ----------
+# ---------- Tabel 2: fuelbunker (dailiesel, 1 baris per catatan harian) ----------
 D_BIGINT = ["budget", "lastactivity", "active"]
 D_NUMERIC = ["volume", "price"]
 D_TS = ["created_at", "updated_at", "date", "approval_at"]
