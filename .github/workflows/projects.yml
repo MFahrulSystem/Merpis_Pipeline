@@ -23,6 +23,14 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
 
+      - name: Sync port to port
+        if: always()
+        run: python Merpis_PortToPort/porttoport_pipeline.py
+        env:
+          MERPIS_TOKEN_PROJECTS: ${{ secrets.MERPIS_TOKEN_PROJECTS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
       - name: Sync vessels
         if: always()
         run: python Merpis_Vessel/vessel_pipeline.py
