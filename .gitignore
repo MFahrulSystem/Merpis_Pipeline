@@ -3,3 +3,5 @@ environment.env
 __pycache__/
 .ipynb_checkpoints/
 *.pyc
+Merpis_Port/porttoport_cleansing_check.xlsx
+Merpis_Port/porttoport_raw.json
