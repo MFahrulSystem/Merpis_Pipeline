@@ -1092,6 +1092,44 @@ def upload_to_supabase(df_upload):
     print(f"Data inserted  : {total_uploaded:,} rows")
     print("===================================")
 
+def sync_revenue_override():
+    """Isi tabel revenue_override dari dict MANUAL_REVENUE (dict = sumber utama)."""
+
+    sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    rows = [
+        {"project_code": k.strip().upper(), "revenue": v}
+        for k, v in MANUAL_REVENUE.items()
+    ]
+
+    if not rows:
+        print("MANUAL_REVENUE kosong, sinkron revenue_override dilewati.")
+        return
+
+    # Tambah / perbarui semua kode di dict
+    sb.table("revenue_override").upsert(
+        rows,
+        on_conflict="project_code"
+    ).execute()
+
+    # Hapus baris di tabel yang sudah tidak ada di dict (tabel = cermin dict)
+    existing = (
+        sb.table("revenue_override")
+        .select("project_code")
+        .execute()
+        .data
+    )
+    kode_dict = {r["project_code"] for r in rows}
+    yatim = [e["project_code"] for e in existing if e["project_code"] not in kode_dict]
+
+    for kode in yatim:
+        sb.table("revenue_override").delete().eq("project_code", kode).execute()
+
+    print(
+        f"revenue_override disinkronkan: {len(rows)} baris "
+        f"| dihapus: {len(yatim)}"
+    )
+
 # ===============================================================
 # TABEL TURNAROUND (TRIP SAAT INI DIHUBUNGKAN KE TRIP SEBELUMNYA)
 # ===============================================================
@@ -2020,6 +2058,9 @@ def main():
     df_upload = clean_for_supabase(
         df_matrix_final
     )
+
+    # 4b. SINKRON TABEL revenue_override Dari MANUAL_REVENUE
+    sync_revenue_override()
 
     # Cek hasil Voyage V.2 di log
     if "Voyage V.2" in df_upload.columns:
